@@ -43,7 +43,7 @@ export const cache = {
     return JSON.parse(raw) as T;
   },
 
-  async set(key: string, value: unknown, ttl = CACHE_TTL.MEDIUM): Promise<void> {
+  async set(key: string, value: unknown, ttl: number = CACHE_TTL.MEDIUM): Promise<void> {
     await redis.setex(key, ttl, JSON.stringify(value));
   },
 

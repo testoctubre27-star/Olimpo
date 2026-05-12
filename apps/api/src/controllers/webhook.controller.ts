@@ -1,18 +1,16 @@
 import { Request, Response, NextFunction } from 'express';
 import { handleIncomingMessage } from '../adapters/bot.handler';
-import { respond } from '../utils/response';
 import { logger } from '../config/logger';
 
 export const WebhookController = {
-  async whatsapp(req: Request, res: Response, next: NextFunction) {
+  async whatsapp(req: Request, res: Response, next: NextFunction): Promise<void> {
     try {
-      const { from, body } = {
-        from: req.body.From?.replace('whatsapp:+', '') ?? '',
-        body: req.body.Body ?? '',
-      };
+      const from: string = req.body.From?.replace('whatsapp:+', '') ?? '';
+      const body: string = req.body.Body ?? '';
 
       if (!from) {
-        return respond.ok(res, { data: null, message: 'No sender' });
+        res.status(200).type('text/xml').send('<Response></Response>');
+        return;
       }
 
       logger.info('Webhook received', { from, bodyLength: body.length });
@@ -20,7 +18,6 @@ export const WebhookController = {
       // Process async — Twilio expects 200 fast
       setImmediate(() => handleIncomingMessage(from, body));
 
-      // Twilio expects TwiML or empty 200
       res.status(200).type('text/xml').send('<Response></Response>');
     } catch (err) {
       next(err);

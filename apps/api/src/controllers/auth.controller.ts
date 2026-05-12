@@ -13,40 +13,40 @@ const refreshSchema = z.object({
 });
 
 export const AuthController = {
-  async login(req: Request, res: Response, next: NextFunction) {
+  async login(req: Request, res: Response, next: NextFunction): Promise<void> {
     try {
       const { email, password } = loginSchema.parse(req.body);
       const result = await AuthService.login(email, password);
-      return respond.ok(res, { data: result, message: 'Sesión iniciada' });
+      respond.ok(res, { data: result, message: 'Sesión iniciada' });
     } catch (err) {
       next(err);
     }
   },
 
-  async refresh(req: Request, res: Response, next: NextFunction) {
+  async refresh(req: Request, res: Response, next: NextFunction): Promise<void> {
     try {
       const { refreshToken } = refreshSchema.parse(req.body);
       const result = await AuthService.refresh(refreshToken);
-      return respond.ok(res, { data: result });
+      respond.ok(res, { data: result });
     } catch (err) {
       next(err);
     }
   },
 
-  async logout(req: Request, res: Response, next: NextFunction) {
+  async logout(req: Request, res: Response, next: NextFunction): Promise<void> {
     try {
       const { refreshToken } = refreshSchema.parse(req.body);
       await AuthService.logout(refreshToken);
-      return respond.noContent(res);
+      respond.noContent(res);
     } catch (err) {
       next(err);
     }
   },
 
-  async me(req: Request, res: Response, next: NextFunction) {
+  async me(req: Request, res: Response, next: NextFunction): Promise<void> {
     try {
       const user = await AuthService.getUserById(req.user!.sub);
-      return respond.ok(res, { data: user });
+      respond.ok(res, { data: user });
     } catch (err) {
       next(err);
     }

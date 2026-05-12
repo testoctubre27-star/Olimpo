@@ -1,4 +1,3 @@
-// payment.routes.ts
 import { Router, Request, Response, NextFunction } from 'express';
 import { z } from 'zod';
 import { authenticate, requireAdmin } from '../middleware/auth';
@@ -16,29 +15,29 @@ const monthlySchema = z.object({
   notes: z.string().optional(),
 });
 
-router.get('/student/:studentId', async (req: Request, res: Response, next: NextFunction) => {
+router.get('/student/:studentId', async (req: Request, res: Response, next: NextFunction): Promise<void> => {
   try {
     const payments = await PaymentService.listByStudent(req.params.studentId);
-    return respond.ok(res, { data: payments });
+    respond.ok(res, { data: payments });
   } catch (err) { next(err); }
 });
 
 router.post('/enrollment', audit('PAYMENT_ENROLLMENT', 'Payment'),
-  async (req: Request, res: Response, next: NextFunction) => {
+  async (req: Request, res: Response, next: NextFunction): Promise<void> => {
     try {
       const { studentId } = z.object({ studentId: z.string().cuid() }).parse(req.body);
       const payment = await PaymentService.createEnrollment(studentId, req.user!.sub);
-      return respond.created(res, { data: payment, message: 'Inscripción registrada' });
+      respond.created(res, { data: payment, message: 'Inscripción registrada' });
     } catch (err) { next(err); }
   }
 );
 
 router.post('/monthly', audit('PAYMENT_MONTHLY', 'Payment'),
-  async (req: Request, res: Response, next: NextFunction) => {
+  async (req: Request, res: Response, next: NextFunction): Promise<void> => {
     try {
       const body = monthlySchema.parse(req.body);
       const payment = await PaymentService.createMonthly({ ...body, confirmedById: req.user!.sub });
-      return respond.created(res, { data: payment, message: 'Mensualidad registrada' });
+      respond.created(res, { data: payment, message: 'Mensualidad registrada' });
     } catch (err) { next(err); }
   }
 );

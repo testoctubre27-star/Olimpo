@@ -95,7 +95,7 @@ export const PaymentService = {
 
     // Determine amount
     let amount = params.amount;
-    let type = PaymentType.MONTHLY;
+    let type: PaymentType = PaymentType.MONTHLY;
 
     if (!amount) {
       const modalityConfig = student.scheduleSlots[0]?.schedule.modality;
