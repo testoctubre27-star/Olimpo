@@ -6,7 +6,7 @@ import {
 } from 'lucide-react';
 import { useAuthStore } from '../../store/auth.store';
 import { ToastContainer } from '../ui/Toast';
-import { clsx } from 'clsx';
+
 
 interface NavItem {
   to: string;

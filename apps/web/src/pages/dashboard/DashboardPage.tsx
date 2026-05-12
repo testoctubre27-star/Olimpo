@@ -1,7 +1,7 @@
 import { Users, TrendingUp, AlertTriangle, UserX, DollarSign, Calendar } from 'lucide-react';
 import { BarChart, Bar, XAxis, YAxis, CartesianGrid, Tooltip, ResponsiveContainer, Cell } from 'recharts';
 import { useDashboard } from '../../hooks/useApi';
-import { StatCard, Card, PageSpinner, SectionHeader, Badge } from '../../components/ui';
+import { StatCard, Card, PageSpinner, SectionHeader } from '../../components/ui';
 import { formatCurrency, DAY_LABEL, occupancyColor, formatDate, formatCurrency as fc } from '../../utils/labels';
 
 export default function DashboardPage() {

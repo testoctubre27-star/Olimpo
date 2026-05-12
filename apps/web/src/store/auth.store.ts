@@ -22,7 +22,7 @@ interface AuthState {
 
 export const useAuthStore = create<AuthState>()(
   persist(
-    (set, get) => ({
+    (set) => ({
       user: null,
       token: null,
       isAuthenticated: false,
@@ -30,10 +30,8 @@ export const useAuthStore = create<AuthState>()(
       login: async (email, password) => {
         const { data } = await api.post('/auth/login', { email, password });
         const { accessToken, refreshToken, user } = data.data;
-
         localStorage.setItem('olimpo_token', accessToken);
         localStorage.setItem('olimpo_refresh', refreshToken);
-
         set({ user, token: accessToken, isAuthenticated: true });
       },
 
@@ -51,7 +49,11 @@ export const useAuthStore = create<AuthState>()(
     }),
     {
       name: 'olimpo-auth',
-      partialize: (state) => ({ user: state.user, token: state.token, isAuthenticated: state.isAuthenticated }),
+      partialize: (state) => ({
+        user: state.user,
+        token: state.token,
+        isAuthenticated: state.isAuthenticated,
+      }),
     }
   )
 );

@@ -1,5 +1,5 @@
+import { ReactNode } from 'react';
 import { create } from 'zustand';
-import { useEffect, ReactNode } from 'react';
 import { CheckCircle, AlertCircle, Info, X } from 'lucide-react';
 
 type ToastType = 'success' | 'error' | 'info';
@@ -26,7 +26,6 @@ export const useToastStore = create<ToastState>((set) => ({
   remove: (id) => set(s => ({ toasts: s.toasts.filter(t => t.id !== id) })),
 }));
 
-// Convenience helpers
 export const toast = {
   success: (msg: string) => useToastStore.getState().add('success', msg),
   error:   (msg: string) => useToastStore.getState().add('error', msg),
@@ -39,7 +38,13 @@ const icons: Record<ToastType, ReactNode> = {
   info:    <Info        size={16} color="var(--info)" />,
 };
 
-const toastBg: Record<ToastType, string> = {
+const borderColors: Record<ToastType, string> = {
+  success: 'var(--success)',
+  error:   'var(--danger)',
+  info:    'var(--info)',
+};
+
+const bgColors: Record<ToastType, string> = {
   success: 'var(--success-bg)',
   error:   'var(--danger-bg)',
   info:    'var(--info-bg)',
@@ -55,21 +60,25 @@ export function ToastContainer() {
           key={t.id}
           className="animate-slideIn"
           style={{
-            display: 'flex', alignItems: 'center', gap: 10,
+            display: 'flex',
+            alignItems: 'center',
+            gap: 10,
             padding: '10px 14px',
-            background: 'var(--surface)',
+            background: bgColors[t.type],
             border: '1px solid var(--border)',
-            borderLeft: `3px solid ${t.type === 'success' ? 'var(--success)' : t.type === 'error' ? 'var(--danger)' : 'var(--info)'}`,
+            borderLeft: `3px solid ${borderColors[t.type]}`,
             borderRadius: 'var(--radius-md)',
             boxShadow: 'var(--shadow-md)',
             maxWidth: 360,
             pointerEvents: 'all',
-            background: toastBg[t.type],
           }}
         >
           {icons[t.type]}
           <p style={{ flex: 1, fontSize: 13, fontWeight: 500, color: 'var(--text-primary)' }}>{t.message}</p>
-          <button onClick={() => remove(t.id)} style={{ background: 'none', border: 'none', cursor: 'pointer', color: 'var(--text-muted)', display: 'flex', padding: 2 }}>
+          <button
+            onClick={() => remove(t.id)}
+            style={{ background: 'none', border: 'none', cursor: 'pointer', color: 'var(--text-muted)', display: 'flex', padding: 2 }}
+          >
             <X size={14} />
           </button>
         </div>
