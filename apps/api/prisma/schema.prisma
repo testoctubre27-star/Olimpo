@@ -1,0 +1,314 @@
+// ─────────────────────────────────────────────
+// OLIMPO — Prisma Schema
+// Database: PostgreSQL on Supabase
+// ORM: Prisma v5
+// ─────────────────────────────────────────────
+
+generator client {
+  provider = "prisma-client-js"
+}
+
+datasource db {
+  provider  = "postgresql"
+  url       = env("DATABASE_URL")
+  directUrl = env("DIRECT_URL")
+}
+
+// ─── Enums ────────────────────────────────────
+
+enum Role {
+  ADMIN
+  TEACHER
+  STUDENT
+}
+
+enum StudentStatus {
+  PENDING_PAYMENT   // Onboarding, esperando primer pago
+  ACTIVE            // Al corriente
+  DELINQUENT        // Moroso, dentro de periodo de gracia
+  SUSPENDED         // Lugar liberado por falta de pago
+  INACTIVE          // Baja voluntaria
+}
+
+enum Modality {
+  PERSONAL_CHILD    // Personalizado infantil (1 maestro : 1 alumno)
+  GROUP_CHILD       // Grupal infantil (max 8)
+  GROUP_ADULT       // Grupal adultos
+  FREE_ACCESS       // Acceso libre
+  AQUA_THERAPY      // Terapia acuática
+}
+
+enum PaymentType {
+  ENROLLMENT        // Inscripción anual
+  MONTHLY           // Mensualidad
+  PROPORTIONAL      // Mensualidad proporcional (ingreso a mes en curso)
+}
+
+enum PaymentStatus {
+  PENDING
+  CONFIRMED
+  CANCELLED
+}
+
+enum ConversationState {
+  NEW_CONTACT
+  AWAITING_NAME
+  AWAITING_MODALITY
+  AWAITING_SCHEDULE
+  AWAITING_REGULATION_ACCEPT
+  PENDING_PAYMENT_CONFIRMATION
+  ACTIVE
+  DELINQUENT
+  SUSPENDED
+}
+
+enum AutomationLogStatus {
+  SUCCESS
+  FAILED
+  SKIPPED
+}
+
+// ─── Users (admin / teacher login) ────────────
+
+model User {
+  id        String   @id @default(cuid())
+  email     String   @unique
+  password  String
+  role      Role
+  name      String
+  phone     String?
+  isActive  Boolean  @default(true)
+  createdAt DateTime @default(now())
+  updatedAt DateTime @updatedAt
+
+  teacher    Teacher?
+  auditLogs  AuditLog[]
+  sessions   UserSession[]
+
+  @@map("users")
+}
+
+model UserSession {
+  id           String   @id @default(cuid())
+  userId       String
+  refreshToken String   @unique
+  expiresAt    DateTime
+  createdAt    DateTime @default(now())
+
+  user User @relation(fields: [userId], references: [id], onDelete: Cascade)
+
+  @@map("user_sessions")
+}
+
+// ─── Teachers ─────────────────────────────────
+
+model Teacher {
+  id          String  @id @default(cuid())
+  userId      String  @unique
+  displayName String
+  phone       String
+  commissionPct Decimal @default(0) @db.Decimal(5, 2) // % del pago que le corresponde
+  isActive    Boolean @default(true)
+  createdAt   DateTime @default(now())
+  updatedAt   DateTime @updatedAt
+
+  user         User           @relation(fields: [userId], references: [id])
+  scheduleSlots ScheduleSlot[]
+  students     Student[]
+
+  @@map("teachers")
+}
+
+// ─── Modalities & Schedule Templates ──────────
+
+model ModalityConfig {
+  id          String   @id @default(cuid())
+  modality    Modality @unique
+  name        String
+  description String?
+  maxCapacity Int
+  monthlyFee  Decimal  @db.Decimal(10, 2)
+  isActive    Boolean  @default(true)
+  updatedAt   DateTime @updatedAt
+
+  schedules Schedule[]
+
+  @@map("modality_configs")
+}
+
+// A recurring time slot on a given weekday
+model Schedule {
+  id         String   @id @default(cuid())
+  modalityId String
+  dayOfWeek  Int      // 0=Sun … 6=Sat
+  startTime  String   // "09:00"
+  endTime    String   // "10:00"
+  isActive   Boolean  @default(true)
+  createdAt  DateTime @default(now())
+  updatedAt  DateTime @updatedAt
+
+  modality     ModalityConfig @relation(fields: [modalityId], references: [id])
+  slots        ScheduleSlot[]
+  waitingList  WaitingList[]
+
+  @@map("schedules")
+}
+
+// One slot = one student occupying one schedule
+model ScheduleSlot {
+  id         String   @id @default(cuid())
+  scheduleId String
+  studentId  String
+  teacherId  String?
+  assignedAt DateTime @default(now())
+  releasedAt DateTime?
+  isActive   Boolean  @default(true)
+
+  schedule Schedule  @relation(fields: [scheduleId], references: [id])
+  student  Student   @relation(fields: [studentId], references: [id])
+  teacher  Teacher?  @relation(fields: [teacherId], references: [id])
+
+  @@unique([scheduleId, studentId])
+  @@map("schedule_slots")
+}
+
+// ─── Students ─────────────────────────────────
+
+model Student {
+  id                  String          @id @default(cuid())
+  phone               String          @unique  // WhatsApp number — primary key for bot
+  name                String
+  status              StudentStatus   @default(PENDING_PAYMENT)
+  modality            Modality
+  teacherId           String?
+  conversationState   ConversationState @default(NEW_CONTACT)
+  conversationData    Json?           // Temporary onboarding data
+  enrollmentPaidAt    DateTime?       // Annual enrollment
+  enrollmentExpiresAt DateTime?       // 1 year from enrollmentPaidAt
+  regulationAcceptedAt DateTime?
+  regulationVersion   String?
+  notes               String?
+  createdAt           DateTime        @default(now())
+  updatedAt           DateTime        @updatedAt
+
+  teacher       Teacher?       @relation(fields: [teacherId], references: [id])
+  scheduleSlots ScheduleSlot[]
+  payments      Payment[]
+  waitingList   WaitingList[]
+  notifications NotificationLog[]
+
+  @@map("students")
+}
+
+// ─── Payments ─────────────────────────────────
+
+model Payment {
+  id            String        @id @default(cuid())
+  studentId     String
+  type          PaymentType
+  status        PaymentStatus @default(PENDING)
+  amount        Decimal       @db.Decimal(10, 2)
+  period        String?       // "2026-05" for monthly
+  notes         String?
+  confirmedAt   DateTime?
+  confirmedById String?       // User (admin) who confirmed
+  createdAt     DateTime      @default(now())
+  updatedAt     DateTime      @updatedAt
+
+  student Student @relation(fields: [studentId], references: [id])
+
+  @@map("payments")
+}
+
+// ─── Waiting List ──────────────────────────────
+
+model WaitingList {
+  id           String    @id @default(cuid())
+  scheduleId   String
+  studentId    String
+  position     Int       // FIFO position
+  notifiedAt   DateTime? // When slot became available and we notified
+  respondBy    DateTime? // Deadline to confirm
+  confirmedAt  DateTime?
+  skippedAt    DateTime?
+  createdAt    DateTime  @default(now())
+
+  schedule Schedule @relation(fields: [scheduleId], references: [id])
+  student  Student  @relation(fields: [studentId], references: [id])
+
+  @@unique([scheduleId, studentId])
+  @@map("waiting_list")
+}
+
+// ─── Regulation Signatures ────────────────────
+
+model RegulationSignature {
+  id                String   @id @default(cuid())
+  studentPhone      String
+  regulationVersion String
+  acceptedAt        DateTime @default(now())
+  ipAddress         String?
+  userAgent         String?
+
+  @@map("regulation_signatures")
+}
+
+// ─── Bot Conversation State ────────────────────
+
+model BotSession {
+  id        String   @id @default(cuid())
+  phone     String   @unique
+  state     ConversationState @default(NEW_CONTACT)
+  data      Json?    // Ephemeral context during multi-step flow
+  updatedAt DateTime @updatedAt
+
+  @@map("bot_sessions")
+}
+
+// ─── Notification Log ─────────────────────────
+
+model NotificationLog {
+  id          String   @id @default(cuid())
+  studentId   String?
+  phone       String
+  type        String   // "REMINDER_DAY1" | "SLOT_RELEASED" | "WELCOME" etc.
+  message     String
+  sentAt      DateTime @default(now())
+  twilioSid   String?
+  error       String?
+
+  student Student? @relation(fields: [studentId], references: [id])
+
+  @@map("notification_logs")
+}
+
+// ─── Automation Log (idempotency) ─────────────
+
+model AutomationLog {
+  id        String              @id @default(cuid())
+  jobName   String
+  runAt     DateTime            @default(now())
+  status    AutomationLogStatus
+  details   Json?
+  error     String?
+
+  @@map("automation_logs")
+}
+
+// ─── Audit Log ────────────────────────────────
+
+model AuditLog {
+  id         String   @id @default(cuid())
+  userId     String?
+  action     String   // "STUDENT_CREATED" | "PAYMENT_CONFIRMED" etc.
+  entityType String?
+  entityId   String?
+  before     Json?
+  after      Json?
+  ip         String?
+  createdAt  DateTime @default(now())
+
+  user User? @relation(fields: [userId], references: [id])
+
+  @@map("audit_logs")
+}

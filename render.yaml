@@ -1,0 +1,53 @@
+# render.yaml — OLIMPO deployment configuration for Render
+
+services:
+  # ─── Backend API ──────────────────────────────
+  - type: web
+    name: olimpo-api
+    runtime: node
+    rootDir: apps/api
+    buildCommand: npm install && npx prisma generate && npx prisma db push && npm run build
+    startCommand: npm run start
+    envVars:
+      - key: NODE_ENV
+        value: production
+      - key: DATABASE_URL
+        sync: false
+      - key: DIRECT_URL
+        sync: false
+      - key: JWT_SECRET
+        generateValue: true
+      - key: TWILIO_ACCOUNT_SID
+        sync: false
+      - key: TWILIO_AUTH_TOKEN
+        sync: false
+      - key: TWILIO_WHATSAPP_FROM
+        sync: false
+      - key: FRONTEND_URL
+        sync: false
+      - key: REDIS_URL
+        sync: false
+      # ─ First-run setup: set SETUP_TOKEN before first deploy,
+      #   remove it after creating the first admin
+      - key: SETUP_TOKEN
+        sync: false
+      - key: ALLOW_SETUP
+        value: "true"
+      - key: API_URL
+        sync: false
+    healthCheckPath: /api/health
+
+  # ─── Frontend ─────────────────────────────────
+  - type: web
+    name: olimpo-web
+    runtime: static
+    rootDir: apps/web
+    buildCommand: npm install && npm run build
+    staticPublishPath: dist
+    envVars:
+      - key: VITE_API_URL
+        sync: false
+    routes:
+      - type: rewrite
+        source: /*
+        destination: /index.html
