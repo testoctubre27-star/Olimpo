@@ -16,23 +16,21 @@ import fs from 'fs';
 let sock: WASocket | null = null;
 let currentQR: string | null = null;
 let isConnected = false;
+let reconnectTimer: ReturnType<typeof setTimeout> | null = null;
 let onMessageCallback: ((phone: string, body: string) => Promise<void>) | null = null;
 
-// Baileys uses file-based auth — we persist to a temp dir then sync to DB
 const AUTH_DIR = path.join(process.cwd(), '.baileys-auth');
 
 // ─── DB Auth State ────────────────────────────
-// Syncs Baileys file auth to Supabase after each update
 async function syncAuthToDB(): Promise<void> {
   try {
     if (!fs.existsSync(AUTH_DIR)) return;
-
     const files = fs.readdirSync(AUTH_DIR);
+
     const creds = files.includes('creds.json')
       ? JSON.parse(fs.readFileSync(path.join(AUTH_DIR, 'creds.json'), 'utf-8'))
       : null;
 
-    // Collect all key files
     const keys: Record<string, unknown> = {};
     for (const file of files) {
       if (file !== 'creds.json' && file.endsWith('.json')) {
@@ -46,42 +44,37 @@ async function syncAuthToDB(): Promise<void> {
       where: { id: 'main' },
       update: {
         creds: creds as Prisma.InputJsonValue,
-        keys: keys as Prisma.InputJsonValue,
+        keys:  keys  as Prisma.InputJsonValue,
       },
       create: {
-        id: 'main',
+        id:    'main',
         creds: creds as Prisma.InputJsonValue,
-        keys: keys as Prisma.InputJsonValue,
+        keys:  keys  as Prisma.InputJsonValue,
       },
     });
-
-    logger.info('WhatsApp session synced to DB');
+    logger.info('[WA] Sesión sincronizada a DB');
   } catch (err) {
-    logger.error('Failed to sync WhatsApp session to DB', { err });
+    logger.error('[WA] Error al sincronizar sesión', { err });
   }
 }
 
-// Restore auth files from DB to disk so Baileys can read them
 async function restoreAuthFromDB(): Promise<boolean> {
   try {
     const session = await prisma.whatsAppSession.findUnique({ where: { id: 'main' } });
     if (!session) return false;
 
     fs.mkdirSync(AUTH_DIR, { recursive: true });
-    fs.writeFileSync(
-      path.join(AUTH_DIR, 'creds.json'),
-      JSON.stringify(session.creds)
-    );
+    fs.writeFileSync(path.join(AUTH_DIR, 'creds.json'), JSON.stringify(session.creds));
 
     const keys = session.keys as Record<string, unknown>;
     for (const [filename, content] of Object.entries(keys)) {
       fs.writeFileSync(path.join(AUTH_DIR, filename), JSON.stringify(content));
     }
 
-    logger.info('WhatsApp session restored from DB');
+    logger.info('[WA] Sesión restaurada desde DB');
     return true;
   } catch (err) {
-    logger.error('Failed to restore WhatsApp session from DB', { err });
+    logger.error('[WA] Error al restaurar sesión', { err });
     return false;
   }
 }
@@ -92,28 +85,35 @@ export async function connectWhatsApp(
 ): Promise<void> {
   onMessageCallback = onMessage;
 
-  // Try to restore session from DB first
+  // Clear any pending reconnect timer
+  if (reconnectTimer) { clearTimeout(reconnectTimer); reconnectTimer = null; }
+
+  logger.info('[WA] Iniciando conexión...');
+
   await restoreAuthFromDB();
   fs.mkdirSync(AUTH_DIR, { recursive: true });
 
   const { state, saveCreds } = await useMultiFileAuthState(AUTH_DIR);
-  const { version } = await fetchLatestBaileysVersion();
+  const { version }          = await fetchLatestBaileysVersion();
 
-  const pinoLogger = pino({ level: 'silent' }); // Suppress Baileys verbose logs
+  logger.info(`[WA] Usando Baileys v${version.join('.')}`);
+
+  const pinoLogger = pino({ level: 'silent' });
 
   sock = makeWASocket({
     version,
     auth: {
       creds: state.creds,
-      keys: makeCacheableSignalKeyStore(state.keys, pinoLogger),
+      keys:  makeCacheableSignalKeyStore(state.keys, pinoLogger),
     },
-    printQRInTerminal: false, // We handle QR ourselves
+    printQRInTerminal: false,
     logger: pinoLogger,
     browser: ['OLIMPO', 'Chrome', '120.0'],
     syncFullHistory: false,
+    keepAliveIntervalMs: 15_000, // Ping every 15s to keep connection alive
   });
 
-  // ── Save creds on update and sync to DB ──────
+  // ── Creds update ─────────────────────────────
   sock.ev.on('creds.update', async () => {
     await saveCreds();
     await syncAuthToDB();
@@ -124,63 +124,88 @@ export async function connectWhatsApp(
     const { connection, lastDisconnect, qr } = update;
 
     if (qr) {
-      currentQR = qr;
+      currentQR   = qr;
       isConnected = false;
-      logger.info('WhatsApp QR generated — scan at /api/whatsapp/qr');
+      logger.info('[WA] QR generado — escanea en /api/whatsapp/qr');
     }
 
     if (connection === 'open') {
-      currentQR = null;
+      currentQR   = null;
       isConnected = true;
-      logger.info('WhatsApp connected successfully');
+      logger.info('[WA] ✅ Conectado exitosamente');
       await syncAuthToDB();
     }
 
     if (connection === 'close') {
       isConnected = false;
-      const statusCode = (lastDisconnect?.error as Boom)?.output?.statusCode;
+      const statusCode     = (lastDisconnect?.error as Boom)?.output?.statusCode;
       const shouldReconnect = statusCode !== DisconnectReason.loggedOut;
 
-      logger.warn('WhatsApp disconnected', { statusCode, shouldReconnect });
+      logger.warn(`[WA] Desconectado (código: ${statusCode}) — reconectar: ${shouldReconnect}`);
 
       if (shouldReconnect) {
-        logger.info('Reconnecting WhatsApp in 5s...');
-        setTimeout(() => connectWhatsApp(onMessage), 5000);
+        logger.info('[WA] Reconectando en 5 segundos...');
+        reconnectTimer = setTimeout(() => connectWhatsApp(onMessage), 5000);
       } else {
-        // Logged out — clear session from DB
-        logger.warn('WhatsApp logged out — clearing session from DB');
+        logger.warn('[WA] Sesión cerrada (logged out) — limpiando sesión de DB');
         await prisma.whatsAppSession.deleteMany({ where: { id: 'main' } });
-        if (fs.existsSync(AUTH_DIR)) {
-          fs.rmSync(AUTH_DIR, { recursive: true });
-        }
+        if (fs.existsSync(AUTH_DIR)) fs.rmSync(AUTH_DIR, { recursive: true });
       }
     }
   });
 
   // ── Incoming messages ─────────────────────────
   sock.ev.on('messages.upsert', async ({ messages, type }) => {
+    logger.info(`[WA] messages.upsert type=${type} count=${messages.length}`);
+
+    // Accept both 'notify' and 'append' to catch all incoming messages
     if (type !== 'notify') return;
 
     for (const msg of messages) {
-      if (msg.key.fromMe) continue; // Ignore our own messages
-      if (!msg.message) continue;
+      // Skip our own messages
+      if (msg.key.fromMe) {
+        logger.info('[WA] Mensaje propio ignorado');
+        continue;
+      }
 
-      const phone = msg.key.remoteJid?.replace('@s.whatsapp.net', '').replace('+', '') ?? '';
+      // Skip group messages
+      if (msg.key.remoteJid?.endsWith('@g.us')) {
+        logger.info('[WA] Mensaje de grupo ignorado');
+        continue;
+      }
+
+      if (!msg.message) {
+        logger.info('[WA] Mensaje sin contenido ignorado');
+        continue;
+      }
+
+      const rawJid = msg.key.remoteJid ?? '';
+
+      // Extract phone keeping full country code — DO NOT strip leading digits
+      // Baileys JID format: "521XXXXXXXXXX@s.whatsapp.net"
+      const phone = rawJid.replace('@s.whatsapp.net', '');
+
       if (!phone) continue;
 
       const body =
         msg.message.conversation ??
         msg.message.extendedTextMessage?.text ??
+        msg.message.imageMessage?.caption ??
         '';
 
-      if (!body.trim()) continue;
+      logger.info(`[WA] rawJid=${rawJid} phone=${phone} body="${body.slice(0, 80)}"`);
 
-      logger.info('Message received', { phone, body: body.slice(0, 60) });
+      if (!body.trim()) {
+        logger.info('[WA] Mensaje vacío ignorado');
+        continue;
+      }
 
       if (onMessageCallback) {
         await onMessageCallback(phone, body).catch(err =>
-          logger.error('Error handling message', { err, phone })
+          logger.error('[WA] Error procesando mensaje', { err, phone })
         );
+      } else {
+        logger.warn('[WA] Sin callback registrado — mensaje descartado');
       }
     }
   });
@@ -197,50 +222,44 @@ export interface SendMessageOptions {
 export const WhatsAppAdapter = {
   async send(opts: SendMessageOptions): Promise<void> {
     if (!sock || !isConnected) {
-      logger.warn('WhatsApp not connected — message not sent', { to: opts.to, type: opts.type });
+      logger.warn(`[WA] No conectado — mensaje NO enviado a ${opts.to}`);
       return;
     }
 
-    const jid = `${opts.to.replace(/\D/g, '')}@s.whatsapp.net`;
+    // opts.to comes from Baileys JID (already has country code, e.g. "521XXXXXXXXXX")
+    // Just ensure it has no + prefix and append the suffix
+    const cleanPhone = opts.to.replace(/[^0-9]/g, '');
+    const jid = `${cleanPhone}@s.whatsapp.net`;
+    logger.info(`[WA] Enviando a jid=${jid}`);
 
     try {
       await sock.sendMessage(jid, { text: opts.body });
 
-      // Log to DB
       await prisma.notificationLog.create({
         data: {
-          phone: opts.to,
+          phone:     opts.to,
           studentId: opts.studentId,
-          type: opts.type ?? 'GENERAL',
-          message: opts.body,
+          type:      opts.type ?? 'GENERAL',
+          message:   opts.body,
         },
       });
 
-      logger.info('WhatsApp message sent', { to: opts.to, type: opts.type });
+      logger.info(`[WA] ✅ Mensaje enviado a ${opts.to} (${opts.type})`);
     } catch (err) {
-      logger.error('WhatsApp send failed', { to: opts.to, err });
-
+      logger.error(`[WA] Error enviando a ${opts.to}`, { err });
       await prisma.notificationLog.create({
         data: {
-          phone: opts.to,
+          phone:     opts.to,
           studentId: opts.studentId,
-          type: opts.type ?? 'GENERAL',
-          message: opts.body,
-          error: err instanceof Error ? err.message : String(err),
+          type:      opts.type ?? 'GENERAL',
+          message:   opts.body,
+          error:     err instanceof Error ? err.message : String(err),
         },
       }).catch(() => undefined);
     }
   },
 
-  getQR(): string | null {
-    return currentQR;
-  },
-
-  isConnected(): boolean {
-    return isConnected;
-  },
-
-  getSocket(): WASocket | null {
-    return sock;
-  },
+  getQR():      string | null { return currentQR; },
+  isConnected(): boolean       { return isConnected; },
+  getSocket():  WASocket | null { return sock; },
 };
