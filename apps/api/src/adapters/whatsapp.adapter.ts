@@ -5,8 +5,6 @@ import makeWASocket, {
   useMultiFileAuthState,
   WASocket,
 } from '@whiskeysockets/baileys';
-// eslint-disable-next-line @typescript-eslint/no-explicit-any
-const makeInMemoryStore = (require('@whiskeysockets/baileys') as any).makeInMemoryStore;
 import { Boom } from '@hapi/boom';
 import { prisma, Prisma } from '../config/database';
 import { logger } from '../config/logger';
@@ -21,9 +19,8 @@ let isConnected = false;
 let reconnectTimer: ReturnType<typeof setTimeout> | null = null;
 let onMessageCallback: ((phone: string, body: string) => Promise<void>) | null = null;
 
-// In-memory store to resolve LID → real phone JID
-// eslint-disable-next-line @typescript-eslint/no-explicit-any
-const store: any = makeInMemoryStore ? makeInMemoryStore({ logger: pino({ level: 'silent' }) }) : null;
+// LID → real phone mapping built up as messages arrive
+const lidPhoneMap = new Map<string, string>();
 
 const AUTH_DIR = path.join(process.cwd(), '.baileys-auth');
 
@@ -85,13 +82,40 @@ async function restoreAuthFromDB(): Promise<boolean> {
   }
 }
 
+// ─── Resolve phone from JID ───────────────────
+// Handles both @s.whatsapp.net and @lid formats
+function resolvePhone(jid: string, participant?: string): string | null {
+  // Normal JID — extract phone directly
+  if (jid.endsWith('@s.whatsapp.net')) {
+    return jid.replace('@s.whatsapp.net', '');
+  }
+
+  // @lid format — check our map first
+  if (jid.endsWith('@lid')) {
+    // Check if we already resolved this LID
+    const cached = lidPhoneMap.get(jid);
+    if (cached) return cached;
+
+    // participant field sometimes contains the real JID
+    if (participant?.endsWith('@s.whatsapp.net')) {
+      const phone = participant.replace('@s.whatsapp.net', '');
+      lidPhoneMap.set(jid, phone);
+      logger.info(`[WA] LID ${jid} → ${phone} (via participant)`);
+      return phone;
+    }
+
+    return null; // Cannot resolve yet
+  }
+
+  return null;
+}
+
 // ─── Connect ──────────────────────────────────
 export async function connectWhatsApp(
   onMessage: (phone: string, body: string) => Promise<void>
 ): Promise<void> {
   onMessageCallback = onMessage;
 
-  // Clear any pending reconnect timer
   if (reconnectTimer) { clearTimeout(reconnectTimer); reconnectTimer = null; }
 
   logger.info('[WA] Iniciando conexión...');
@@ -102,7 +126,7 @@ export async function connectWhatsApp(
   const { state, saveCreds } = await useMultiFileAuthState(AUTH_DIR);
   const { version }          = await fetchLatestBaileysVersion();
 
-  logger.info(`[WA] Usando Baileys v${version.join('.')}`);
+  logger.info(`[WA] Versión Baileys: ${version.join('.')}`);
 
   const pinoLogger = pino({ level: 'silent' });
 
@@ -116,11 +140,8 @@ export async function connectWhatsApp(
     logger: pinoLogger,
     browser: ['OLIMPO', 'Chrome', '120.0'],
     syncFullHistory: false,
-    keepAliveIntervalMs: 15_000, // Ping every 15s to keep connection alive
+    keepAliveIntervalMs: 15_000,
   });
-
-  // ── Bind store to socket (resolves LID → phone) ──
-  store.bind(sock.ev);
 
   // ── Creds update ─────────────────────────────
   sock.ev.on('creds.update', async () => {
@@ -147,7 +168,7 @@ export async function connectWhatsApp(
 
     if (connection === 'close') {
       isConnected = false;
-      const statusCode     = (lastDisconnect?.error as Boom)?.output?.statusCode;
+      const statusCode      = (lastDisconnect?.error as Boom)?.output?.statusCode;
       const shouldReconnect = statusCode !== DisconnectReason.loggedOut;
 
       logger.warn(`[WA] Desconectado (código: ${statusCode}) — reconectar: ${shouldReconnect}`);
@@ -156,80 +177,61 @@ export async function connectWhatsApp(
         logger.info('[WA] Reconectando en 5 segundos...');
         reconnectTimer = setTimeout(() => connectWhatsApp(onMessage), 5000);
       } else {
-        logger.warn('[WA] Sesión cerrada (logged out) — limpiando sesión de DB');
+        logger.warn('[WA] Sesión cerrada — limpiando DB');
         await prisma.whatsAppSession.deleteMany({ where: { id: 'main' } });
         if (fs.existsSync(AUTH_DIR)) fs.rmSync(AUTH_DIR, { recursive: true });
       }
     }
   });
 
+  // ── Learn LID → phone from contact updates ────
+  // This is the key: when WhatsApp sends contact info,
+  // we learn the real phone behind each LID
+  sock.ev.on('contacts.update', (contacts) => {
+    for (const contact of contacts) {
+      if (contact.id?.endsWith('@s.whatsapp.net') && contact.lid) {
+        const phone = contact.id.replace('@s.whatsapp.net', '');
+        lidPhoneMap.set(contact.lid, phone);
+        logger.info(`[WA] Contacto aprendido: LID ${contact.lid} → ${phone}`);
+      }
+    }
+  });
+
+  sock.ev.on('contacts.upsert', (contacts) => {
+    for (const contact of contacts) {
+      if (contact.id?.endsWith('@s.whatsapp.net') && contact.lid) {
+        const phone = contact.id.replace('@s.whatsapp.net', '');
+        lidPhoneMap.set(contact.lid, phone);
+        logger.info(`[WA] Contacto upsert: LID ${contact.lid} → ${phone}`);
+      }
+    }
+  });
+
   // ── Incoming messages ─────────────────────────
   sock.ev.on('messages.upsert', async ({ messages, type }) => {
-    logger.info(`[WA] messages.upsert type=${type} count=${messages.length}`);
-
-    // Accept both 'notify' and 'append' to catch all incoming messages
     if (type !== 'notify') return;
 
     for (const msg of messages) {
-      // Skip our own messages
-      if (msg.key.fromMe) {
-        logger.info('[WA] Mensaje propio ignorado');
-        continue;
-      }
+      if (msg.key.fromMe) continue;
+      if (msg.key.remoteJid?.endsWith('@g.us')) continue;
+      if (!msg.message) continue;
 
-      // Skip group messages
-      if (msg.key.remoteJid?.endsWith('@g.us')) {
-        logger.info('[WA] Mensaje de grupo ignorado');
-        continue;
-      }
+      const rawJid      = msg.key.remoteJid ?? '';
+      const participant = msg.key.participant ?? '';
 
-      if (!msg.message) {
-        logger.info('[WA] Mensaje sin contenido ignorado');
-        continue;
-      }
+      const phone = resolvePhone(rawJid, participant);
 
-      const rawJid = msg.key.remoteJid ?? '';
+      if (!phone) {
+        logger.warn(`[WA] No se pudo resolver JID: ${rawJid} — esperando contacto...`);
 
-      // Baileys can deliver two JID formats:
-      // 1. "521XXXXXXXXXX@s.whatsapp.net" — normal phone JID
-      // 2. "XXXXXXXXXX@lid"              — Local ID (internal WhatsApp identifier)
-      //
-      // When @lid arrives we must resolve it to the real phone JID using
-      // the contact store. If we cannot resolve, fall back to participant field.
-      let phone: string;
-
-      if (rawJid.endsWith('@lid')) {
-        // @lid is an internal WhatsApp identifier.
-        // Try to resolve using participant field first,
-        // then fall back to looking up in the in-memory store.
-        const participant = msg.key.participant ?? '';
-
-        if (participant && participant.includes('@s.whatsapp.net')) {
-          // Participant field has the real JID
-          phone = participant.replace('@s.whatsapp.net', '');
-          logger.info(`[WA] LID resuelto via participant: ${phone}`);
-        } else {
-          // Try the store — typed as any to avoid version incompatibilities
-          // eslint-disable-next-line @typescript-eslint/no-explicit-any
-          const contacts = (store as any)?.contacts as Record<string, { id?: string }> | undefined;
-          const contact  = contacts?.[rawJid];
-          const resolved = contact?.id ?? '';
-
-          if (resolved && resolved.includes('@s.whatsapp.net')) {
-            phone = resolved.replace('@s.whatsapp.net', '');
-            logger.info(`[WA] LID ${rawJid} resuelto via store: ${phone}`);
-          } else {
-            // Cannot resolve yet — store not populated for this contact.
-            // The user needs to send a second message after the store learns the mapping.
-            logger.warn(`[WA] LID ${rawJid} sin resolver todavía — el próximo mensaje funcionará`);
-            continue;
-          }
+        // Request contact info so next message resolves correctly
+        if (sock && rawJid) {
+          try {
+            await sock.updateProfilePicture(rawJid, Buffer.alloc(0)).catch(() => undefined);
+          } catch { /* ignore */ }
         }
-      } else {
-        phone = rawJid.replace('@s.whatsapp.net', '');
+        continue;
       }
-
-      if (!phone) continue;
 
       const body =
         msg.message.conversation ??
@@ -237,19 +239,14 @@ export async function connectWhatsApp(
         msg.message.imageMessage?.caption ??
         '';
 
-      logger.info(`[WA] rawJid=${rawJid} phone=${phone} body="${body.slice(0, 80)}"`);
+      if (!body.trim()) continue;
 
-      if (!body.trim()) {
-        logger.info('[WA] Mensaje vacío ignorado');
-        continue;
-      }
+      logger.info(`[WA] ✉️  De: ${phone} | Texto: "${body.slice(0, 80)}"`);
 
       if (onMessageCallback) {
         await onMessageCallback(phone, body).catch(err =>
           logger.error('[WA] Error procesando mensaje', { err, phone })
         );
-      } else {
-        logger.warn('[WA] Sin callback registrado — mensaje descartado');
       }
     }
   });
@@ -270,11 +267,9 @@ export const WhatsAppAdapter = {
       return;
     }
 
-    // opts.to is the phone number with country code (e.g. "521XXXXXXXXXX")
     // Always send to @s.whatsapp.net — never to @lid
     const cleanPhone = opts.to.replace(/[^0-9]/g, '');
-    const jid = `${cleanPhone}@s.whatsapp.net`;
-    logger.info(`[WA] Enviando a phone=${opts.to} jid=${jid}`);
+    const jid        = `${cleanPhone}@s.whatsapp.net`;
 
     try {
       await sock.sendMessage(jid, { text: opts.body });
@@ -288,9 +283,9 @@ export const WhatsAppAdapter = {
         },
       });
 
-      logger.info(`[WA] ✅ Mensaje enviado a ${opts.to} (${opts.type})`);
+      logger.info(`[WA] ✅ Enviado a ${cleanPhone} (${opts.type})`);
     } catch (err) {
-      logger.error(`[WA] Error enviando a ${opts.to}`, { err });
+      logger.error(`[WA] Error enviando a ${cleanPhone}`, { err });
       await prisma.notificationLog.create({
         data: {
           phone:     opts.to,
@@ -303,7 +298,7 @@ export const WhatsAppAdapter = {
     }
   },
 
-  getQR():      string | null { return currentQR; },
-  isConnected(): boolean       { return isConnected; },
-  getSocket():  WASocket | null { return sock; },
+  getQR():       string | null  { return currentQR; },
+  isConnected(): boolean        { return isConnected; },
+  getSocket():   WASocket | null { return sock; },
 };
