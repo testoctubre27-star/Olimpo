@@ -31,6 +31,7 @@ enum StudentStatus {
 }
 
 enum Modality {
+  PERSONAL_CHILD // Legado — reemplazado por fases de bebes
   BABY_PHASE1    // Natacion bebes fase 1: 4-12 meses, maestra dedicada
   BABY_PHASE2    // Natacion bebes fase 2: 1-3 anios, maestra dedicada
   BABY_PHASE3    // Natacion bebes fase 3: 3-5 anios, maestra dedicada
@@ -313,4 +314,14 @@ model AuditLog {
   user User? @relation(fields: [userId], references: [id])
 
   @@map("audit_logs")
+}
+
+// ─── WhatsApp Session (Baileys auth persistence) ──
+model WhatsAppSession {
+  id        String   @id @default("main")
+  creds     Json     // Baileys auth credentials
+  keys      Json     // Baileys signal keys
+  updatedAt DateTime @updatedAt
+
+  @@map("whatsapp_sessions")
 }

@@ -1,11 +1,12 @@
-import { Users, TrendingUp, AlertTriangle, UserX, DollarSign, Calendar } from 'lucide-react';
+import { Users, TrendingUp, AlertTriangle, UserX, DollarSign, Calendar, Wifi, WifiOff, QrCode } from 'lucide-react';
 import { BarChart, Bar, XAxis, YAxis, CartesianGrid, Tooltip, ResponsiveContainer, Cell } from 'recharts';
-import { useDashboard } from '../../hooks/useApi';
+import { useDashboard, useWhatsAppStatus } from '../../hooks/useApi';
 import { StatCard, Card, PageSpinner, SectionHeader } from '../../components/ui';
 import { formatCurrency, DAY_LABEL, occupancyColor, formatDate, formatCurrency as fc } from '../../utils/labels';
 
 export default function DashboardPage() {
   const { data, isLoading, error } = useDashboard();
+  const { data: waStatus } = useWhatsAppStatus();
 
   if (isLoading) return <PageSpinner />;
   if (error || !data) return (
@@ -64,6 +65,44 @@ export default function DashboardPage() {
           icon={<DollarSign size={20} color="var(--primary)" />}
           color="var(--primary-light)"
         />
+      </div>
+
+      {/* ── WhatsApp status ── */}
+      <div style={{ marginBottom: 20 }}>
+        <Card style={{ display: 'flex', alignItems: 'center', justifyContent: 'space-between', padding: '14px 20px' }}>
+          <div style={{ display: 'flex', alignItems: 'center', gap: 12 }}>
+            {waStatus?.connected
+              ? <Wifi size={18} color="var(--success)" />
+              : <WifiOff size={18} color="var(--danger)" />}
+            <div>
+              <p style={{ fontSize: 14, fontWeight: 600, color: 'var(--text-primary)' }}>
+                WhatsApp {waStatus?.connected ? 'conectado' : 'desconectado'}
+              </p>
+              <p style={{ fontSize: 12, color: 'var(--text-muted)', marginTop: 2 }}>
+                {waStatus?.connected
+                  ? 'El bot está activo y recibiendo mensajes'
+                  : waStatus?.hasQR
+                  ? 'QR listo para escanear'
+                  : 'Sin conexión — iniciando...'}
+              </p>
+            </div>
+          </div>
+          {!waStatus?.connected && (
+            <a
+              href={`${import.meta.env.VITE_API_URL?.replace('/api', '')}/api/whatsapp/qr`}
+              target="_blank"
+              rel="noopener noreferrer"
+              style={{
+                display: 'flex', alignItems: 'center', gap: 6,
+                padding: '6px 14px', borderRadius: 'var(--radius-md)',
+                background: 'var(--primary)', color: 'white',
+                fontSize: 13, fontWeight: 500, textDecoration: 'none',
+              }}
+            >
+              <QrCode size={14} /> Escanear QR
+            </a>
+          )}
+        </Card>
       </div>
 
       {/* ── Main grid ── */}

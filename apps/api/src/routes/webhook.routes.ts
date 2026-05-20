@@ -1,9 +1,9 @@
 import { Router } from 'express';
-import { WebhookController } from '../controllers/webhook.controller';
 
 const router = Router();
 
-// Twilio posts here on every incoming WhatsApp message
-router.post('/whatsapp', WebhookController.whatsapp);
+// Twilio webhook removed — now using Baileys (WhatsApp Web)
+// Messages are received directly via Baileys socket connection
+// See: src/adapters/whatsapp.adapter.ts
 
 export default router;

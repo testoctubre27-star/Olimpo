@@ -254,3 +254,21 @@ export interface FinancialReport {
   from: string;
   to: string;
 }
+
+// ─── WhatsApp Status ──────────────────────────
+
+export interface WhatsAppStatus {
+  connected: boolean;
+  hasQR: boolean;
+}
+
+export function useWhatsAppStatus() {
+  return useQuery({
+    queryKey: ['whatsapp-status'],
+    queryFn: async () => {
+      const { data } = await api.get('/whatsapp/status');
+      return data.data as WhatsAppStatus;
+    },
+    refetchInterval: 10_000, // Poll every 10s
+  });
+}

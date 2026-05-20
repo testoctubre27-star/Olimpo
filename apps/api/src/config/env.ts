@@ -17,16 +17,12 @@ const envSchema = z.object({
 
   REDIS_URL: z.string().default('redis://localhost:6379'),
 
-  TWILIO_ACCOUNT_SID:   z.string().default(''),
-  TWILIO_AUTH_TOKEN:    z.string().default(''),
-  TWILIO_WHATSAPP_FROM: z.string().default(''),
-
   FRONTEND_URL: z.string().url().default('http://localhost:5173'),
 
   LOG_LEVEL: z.enum(['error', 'warn', 'info', 'debug']).default('info'),
 
-  SETUP_TOKEN: z.string().optional(),
-  ALLOW_SETUP: z.string().optional(),
+  SETUP_TOKEN:  z.string().optional(),
+  ALLOW_SETUP:  z.string().optional(),
 });
 
 const parsed = envSchema.safeParse(process.env);
@@ -36,6 +32,5 @@ if (!parsed.success) {
   process.exit(1);
 }
 
-// Non-null assertion is safe here — we exit above if parsing fails
 export const config = parsed.data!;
 export type Config = typeof config;
