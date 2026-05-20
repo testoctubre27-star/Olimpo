@@ -15,11 +15,13 @@ export const STATUS_BADGE: Record<string, 'success' | 'warning' | 'danger' | 'de
 };
 
 export const MODALITY_LABEL: Record<string, string> = {
-  PERSONAL_CHILD: 'Personalizado infantil',
-  GROUP_CHILD:    'Grupal infantil',
-  GROUP_ADULT:    'Grupal adultos',
-  FREE_ACCESS:    'Acceso libre',
-  AQUA_THERAPY:   'Terapia acuática',
+  BABY_PHASE1:  'Natación Bebés Fase 1 (4-12 meses)',
+  BABY_PHASE2:  'Natación Bebés Fase 2 (1-3 años)',
+  BABY_PHASE3:  'Natación Bebés Fase 3 (3-5 años)',
+  GROUP_CHILD:  'Natación Grupal',
+  GROUP_ADULT:  'Natación Adultos Grupal',
+  FREE_ACCESS:  'Acceso Libre',
+  AQUA_THERAPY: 'Terapia Acuática',
 };
 
 export const PAYMENT_TYPE_LABEL: Record<string, string> = {

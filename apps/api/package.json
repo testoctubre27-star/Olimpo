@@ -12,7 +12,8 @@
     "prisma:studio": "prisma studio",
     "seed:modalities": "tsx src/scripts/seed-modalities.ts",
     "generate:tokens": "node src/scripts/generate-tokens.js",
-    "lint": "eslint src --ext .ts"
+    "lint": "eslint src --ext .ts",
+    "seed:production": "tsx src/scripts/seed-production.ts"
   },
   "dependencies": {
     "@prisma/client": "^5.14.0",

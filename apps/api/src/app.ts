@@ -11,6 +11,11 @@ import routes from './routes';
 
 const app = express();
 
+// ─── Trust proxy (required for Render / reverse proxies) ──
+// Tells Express to trust the X-Forwarded-For header from the
+// first proxy hop — needed for rate limiting and IP detection.
+app.set('trust proxy', 1);
+
 // ─── Security ─────────────────────────────────
 app.use(helmet());
 app.use(cors({
@@ -21,13 +26,12 @@ app.use(cors({
 
 // ─── Rate limiting ────────────────────────────
 app.use('/api', rateLimit({
-  windowMs: 15 * 60 * 1000, // 15 min
+  windowMs: 15 * 60 * 1000,
   max: 300,
   standardHeaders: true,
   legacyHeaders: false,
 }));
 
-// Stricter limit for auth endpoints
 app.use('/api/auth/login', rateLimit({
   windowMs: 15 * 60 * 1000,
   max: 10,
@@ -37,19 +41,19 @@ app.use('/api/auth/login', rateLimit({
 // ─── Body parsing ─────────────────────────────
 app.use(compression());
 app.use(express.json({ limit: '1mb' }));
-app.use(express.urlencoded({ extended: true })); // Required for Twilio webhooks
+app.use(express.urlencoded({ extended: true }));
 
 // ─── Logging ──────────────────────────────────
 app.use(morgan('combined', {
-  stream: { write: (msg) => logger.info(msg.trim()) },
-  skip: (req) => req.path === '/api/health',
+  stream: { write: (msg: string) => logger.info(msg.trim()) },
+  skip: (req: express.Request) => req.path === '/api/health',
 }));
 
 // ─── Routes ───────────────────────────────────
 app.use('/api', routes);
 
 // ─── 404 ──────────────────────────────────────
-app.use((_req, res) => {
+app.use((_req: express.Request, res: express.Response) => {
   res.status(404).json({ success: false, message: 'Ruta no encontrada' });
 });
 

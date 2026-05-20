@@ -4,13 +4,15 @@ import { WhatsAppAdapter } from './whatsapp.adapter';
 import { templates } from './templates';
 import { logger } from '../config/logger';
 
-// Maps user text → Modality enum
+// Maps user text input → Modality enum (real OLIMPO modalities)
 const MODALITY_MAP: Record<string, Modality> = {
-  '1': Modality.PERSONAL_CHILD,
-  '2': Modality.GROUP_CHILD,
-  '3': Modality.GROUP_ADULT,
-  '4': Modality.FREE_ACCESS,
-  '5': Modality.AQUA_THERAPY,
+  '1': 'BABY_PHASE1',
+  '2': 'BABY_PHASE2',
+  '3': 'BABY_PHASE3',
+  '4': 'GROUP_CHILD',
+  '5': 'FREE_ACCESS',
+  '6': 'AQUA_THERAPY',
+  '7': 'GROUP_ADULT',
 };
 
 export async function handleIncomingMessage(phone: string, body: string): Promise<void> {
@@ -24,7 +26,7 @@ export async function handleIncomingMessage(phone: string, body: string): Promis
     });
   }
 
-  logger.info('Bot incoming', { phone, state: session.state, text });
+  logger.info('Bot incoming', { phone, state: session.state, text: body.slice(0, 50) });
 
   switch (session.state) {
 
@@ -40,15 +42,12 @@ export async function handleIncomingMessage(phone: string, body: string): Promis
     case ConversationState.AWAITING_NAME: {
       const name = body.trim();
       if (name.length < 2) {
-        await WhatsAppAdapter.send({ to: phone, body: '¿Puedes decirme tu nombre completo?', type: 'RETRY' });
+        await WhatsAppAdapter.send({ to: phone, body: '¿Puedes decirme tu nombre completo? 😊', type: 'RETRY' });
         break;
       }
       await prisma.botSession.update({
         where: { phone },
-        data: {
-          state: ConversationState.AWAITING_MODALITY,
-          data: { name },
-        },
+        data: { state: ConversationState.AWAITING_MODALITY, data: { name } },
       });
       await WhatsAppAdapter.send({ to: phone, body: templates.askModality(), type: 'ASK_MODALITY' });
       break;
@@ -71,10 +70,7 @@ export async function handleIncomingMessage(phone: string, body: string): Promis
 
       // Fetch available schedules for chosen modality
       const schedules = await prisma.schedule.findMany({
-        where: {
-          modality: { modality },
-          isActive: true,
-        },
+        where: { modality: { modality }, isActive: true },
         include: {
           slots: { where: { isActive: true } },
           modality: true,
@@ -89,7 +85,7 @@ export async function handleIncomingMessage(phone: string, body: string): Promis
       if (available.length === 0) {
         await WhatsAppAdapter.send({
           to: phone,
-          body: 'Lo sentimos, no hay horarios disponibles para esa modalidad en este momento. Te anotaremos en lista de espera cuando se libere un lugar.',
+          body: `Lo sentimos, no hay horarios disponibles para esa modalidad en este momento.\n\nTe anotaremos en lista de espera y te avisaremos cuando se libere un lugar. 🏊`,
           type: 'NO_AVAILABILITY',
         });
         break;
@@ -127,9 +123,7 @@ export async function handleIncomingMessage(phone: string, body: string): Promis
         },
       });
 
-      // TODO: replace with actual hosted URL
-      const regulationUrl = 'https://olimpo.academy/reglamento';
-      await WhatsAppAdapter.send({ to: phone, body: templates.sendRegulation(regulationUrl), type: 'REGULATION' });
+      await WhatsAppAdapter.send({ to: phone, body: templates.sendRegulation(), type: 'REGULATION' });
       break;
     }
 
@@ -137,7 +131,7 @@ export async function handleIncomingMessage(phone: string, body: string): Promis
       if (text !== 'ACEPTO') {
         await WhatsAppAdapter.send({
           to: phone,
-          body: 'Para continuar debes aceptar el reglamento respondiendo *ACEPTO*.',
+          body: 'Para continuar debes aceptar el reglamento respondiendo *ACEPTO*. 📋',
           type: 'RETRY',
         });
         break;
@@ -145,15 +139,10 @@ export async function handleIncomingMessage(phone: string, body: string): Promis
 
       const sessionData = (session.data as Record<string, string>) ?? {};
 
-      // Record signature
       await prisma.regulationSignature.create({
-        data: {
-          studentPhone: phone,
-          regulationVersion: '1.0',
-        },
+        data: { studentPhone: phone, regulationVersion: '1.0' },
       });
 
-      // Upsert student record
       await prisma.student.upsert({
         where: { phone },
         update: {
@@ -182,6 +171,7 @@ export async function handleIncomingMessage(phone: string, body: string): Promis
 
       await WhatsAppAdapter.send({
         to: phone,
+        studentId: undefined,
         body: templates.regulationConfirmed(sessionData.name),
         type: 'REGULATION_CONFIRMED',
       });
@@ -192,10 +182,9 @@ export async function handleIncomingMessage(phone: string, body: string): Promis
     case ConversationState.DELINQUENT:
     case ConversationState.SUSPENDED:
     case ConversationState.PENDING_PAYMENT_CONFIRMATION: {
-      // Existing students — hand off to admin or self-service queries
       await WhatsAppAdapter.send({
         to: phone,
-        body: 'Hola, recibimos tu mensaje. Un administrador te atenderá en breve. También puedes escribir *ESTADO* para consultar tu cuenta.',
+        body: `Hola, recibimos tu mensaje. 👋\n\nUn administrador de *OLIMPO* te atenderá en breve.\n\nTambién puedes escribirnos *ESTADO* para consultar tu cuenta.`,
         type: 'HANDOFF',
       });
       break;
