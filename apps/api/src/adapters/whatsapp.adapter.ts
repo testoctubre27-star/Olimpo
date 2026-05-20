@@ -2,10 +2,11 @@ import makeWASocket, {
   DisconnectReason,
   fetchLatestBaileysVersion,
   makeCacheableSignalKeyStore,
-  makeInMemoryStore,
   useMultiFileAuthState,
   WASocket,
 } from '@whiskeysockets/baileys';
+// eslint-disable-next-line @typescript-eslint/no-explicit-any
+const makeInMemoryStore = (require('@whiskeysockets/baileys') as any).makeInMemoryStore;
 import { Boom } from '@hapi/boom';
 import { prisma, Prisma } from '../config/database';
 import { logger } from '../config/logger';
@@ -21,7 +22,8 @@ let reconnectTimer: ReturnType<typeof setTimeout> | null = null;
 let onMessageCallback: ((phone: string, body: string) => Promise<void>) | null = null;
 
 // In-memory store to resolve LID → real phone JID
-const store = makeInMemoryStore({ logger: pino({ level: 'silent' }) });
+// eslint-disable-next-line @typescript-eslint/no-explicit-any
+const store: any = makeInMemoryStore ? makeInMemoryStore({ logger: pino({ level: 'silent' }) }) : null;
 
 const AUTH_DIR = path.join(process.cwd(), '.baileys-auth');
 
@@ -197,29 +199,32 @@ export async function connectWhatsApp(
       let phone: string;
 
       if (rawJid.endsWith('@lid')) {
-        // Try to get real JID from participant (set in group-like scenarios)
-        // or from the contact store via sock.store
+        // @lid is an internal WhatsApp identifier.
+        // Try to resolve using participant field first,
+        // then fall back to looking up in the in-memory store.
         const participant = msg.key.participant ?? '';
-        if (participant && participant.includes('@s.whatsapp.net')) {
-          phone = participant.replace('@s.whatsapp.net', '');
-        } else {
-          // Try to resolve LID → phone via contact metadata
-          try {
-            const contact = store?.contacts?.[rawJid];
-            const resolvedJid = contact?.id ?? '';
-            phone = resolvedJid.replace('@s.whatsapp.net', '').replace('@lid', '');
-          } catch {
-            // Cannot resolve — skip this message
-            logger.warn(`[WA] No se pudo resolver LID: ${rawJid} — mensaje ignorado`);
-            continue;
-          }
 
-          if (!phone || phone === rawJid.replace('@lid', '')) {
-            logger.warn(`[WA] LID sin resolver: ${rawJid} — mensaje ignorado`);
+        if (participant && participant.includes('@s.whatsapp.net')) {
+          // Participant field has the real JID
+          phone = participant.replace('@s.whatsapp.net', '');
+          logger.info(`[WA] LID resuelto via participant: ${phone}`);
+        } else {
+          // Try the store — typed as any to avoid version incompatibilities
+          // eslint-disable-next-line @typescript-eslint/no-explicit-any
+          const contacts = (store as any)?.contacts as Record<string, { id?: string }> | undefined;
+          const contact  = contacts?.[rawJid];
+          const resolved = contact?.id ?? '';
+
+          if (resolved && resolved.includes('@s.whatsapp.net')) {
+            phone = resolved.replace('@s.whatsapp.net', '');
+            logger.info(`[WA] LID ${rawJid} resuelto via store: ${phone}`);
+          } else {
+            // Cannot resolve yet — store not populated for this contact.
+            // The user needs to send a second message after the store learns the mapping.
+            logger.warn(`[WA] LID ${rawJid} sin resolver todavía — el próximo mensaje funcionará`);
             continue;
           }
         }
-        logger.info(`[WA] LID ${rawJid} resuelto a phone=${phone}`);
       } else {
         phone = rawJid.replace('@s.whatsapp.net', '');
       }
