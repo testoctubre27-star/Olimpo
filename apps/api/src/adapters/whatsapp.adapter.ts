@@ -2,6 +2,7 @@ import makeWASocket, {
   DisconnectReason,
   fetchLatestBaileysVersion,
   makeCacheableSignalKeyStore,
+  makeInMemoryStore,
   useMultiFileAuthState,
   WASocket,
 } from '@whiskeysockets/baileys';
@@ -18,6 +19,9 @@ let currentQR: string | null = null;
 let isConnected = false;
 let reconnectTimer: ReturnType<typeof setTimeout> | null = null;
 let onMessageCallback: ((phone: string, body: string) => Promise<void>) | null = null;
+
+// In-memory store to resolve LID → real phone JID
+const store = makeInMemoryStore({ logger: pino({ level: 'silent' }) });
 
 const AUTH_DIR = path.join(process.cwd(), '.baileys-auth');
 
@@ -113,6 +117,9 @@ export async function connectWhatsApp(
     keepAliveIntervalMs: 15_000, // Ping every 15s to keep connection alive
   });
 
+  // ── Bind store to socket (resolves LID → phone) ──
+  store.bind(sock.ev);
+
   // ── Creds update ─────────────────────────────
   sock.ev.on('creds.update', async () => {
     await saveCreds();
@@ -181,9 +188,41 @@ export async function connectWhatsApp(
 
       const rawJid = msg.key.remoteJid ?? '';
 
-      // Extract phone keeping full country code — DO NOT strip leading digits
-      // Baileys JID format: "521XXXXXXXXXX@s.whatsapp.net"
-      const phone = rawJid.replace('@s.whatsapp.net', '');
+      // Baileys can deliver two JID formats:
+      // 1. "521XXXXXXXXXX@s.whatsapp.net" — normal phone JID
+      // 2. "XXXXXXXXXX@lid"              — Local ID (internal WhatsApp identifier)
+      //
+      // When @lid arrives we must resolve it to the real phone JID using
+      // the contact store. If we cannot resolve, fall back to participant field.
+      let phone: string;
+
+      if (rawJid.endsWith('@lid')) {
+        // Try to get real JID from participant (set in group-like scenarios)
+        // or from the contact store via sock.store
+        const participant = msg.key.participant ?? '';
+        if (participant && participant.includes('@s.whatsapp.net')) {
+          phone = participant.replace('@s.whatsapp.net', '');
+        } else {
+          // Try to resolve LID → phone via contact metadata
+          try {
+            const contact = store?.contacts?.[rawJid];
+            const resolvedJid = contact?.id ?? '';
+            phone = resolvedJid.replace('@s.whatsapp.net', '').replace('@lid', '');
+          } catch {
+            // Cannot resolve — skip this message
+            logger.warn(`[WA] No se pudo resolver LID: ${rawJid} — mensaje ignorado`);
+            continue;
+          }
+
+          if (!phone || phone === rawJid.replace('@lid', '')) {
+            logger.warn(`[WA] LID sin resolver: ${rawJid} — mensaje ignorado`);
+            continue;
+          }
+        }
+        logger.info(`[WA] LID ${rawJid} resuelto a phone=${phone}`);
+      } else {
+        phone = rawJid.replace('@s.whatsapp.net', '');
+      }
 
       if (!phone) continue;
 
@@ -226,11 +265,11 @@ export const WhatsAppAdapter = {
       return;
     }
 
-    // opts.to comes from Baileys JID (already has country code, e.g. "521XXXXXXXXXX")
-    // Just ensure it has no + prefix and append the suffix
+    // opts.to is the phone number with country code (e.g. "521XXXXXXXXXX")
+    // Always send to @s.whatsapp.net — never to @lid
     const cleanPhone = opts.to.replace(/[^0-9]/g, '');
     const jid = `${cleanPhone}@s.whatsapp.net`;
-    logger.info(`[WA] Enviando a jid=${jid}`);
+    logger.info(`[WA] Enviando a phone=${opts.to} jid=${jid}`);
 
     try {
       await sock.sendMessage(jid, { text: opts.body });
