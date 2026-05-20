@@ -89,7 +89,7 @@ export default function DashboardPage() {
           </div>
           {!waStatus?.connected && (
             <a
-              href={`${import.meta.env.VITE_API_URL?.replace('/api', '') ?? 'http://localhost:4000'}/api/whatsapp/qr`}
+              href={`${import.meta.env.VITE_API_URL?.replace('/api', '') ?? 'http://localhost:4000'}/api/whatsapp/qr?token=${localStorage.getItem('olimpo_token') ?? ''}`}
               target="_blank"
               rel="noopener noreferrer"
               style={{
