@@ -2,12 +2,11 @@ import makeWASocket, {
   DisconnectReason,
   fetchLatestBaileysVersion,
   makeCacheableSignalKeyStore,
-  proto,
   useMultiFileAuthState,
   WASocket,
 } from '@whiskeysockets/baileys';
 import { Boom } from '@hapi/boom';
-import { prisma } from '../config/database';
+import { prisma, Prisma } from '../config/database';
 import { logger } from '../config/logger';
 import pino from 'pino';
 import path from 'path';
@@ -45,8 +44,15 @@ async function syncAuthToDB(): Promise<void> {
 
     await prisma.whatsAppSession.upsert({
       where: { id: 'main' },
-      update: { creds, keys },
-      create: { id: 'main', creds, keys },
+      update: {
+        creds: creds as Prisma.InputJsonValue,
+        keys: keys as Prisma.InputJsonValue,
+      },
+      create: {
+        id: 'main',
+        creds: creds as Prisma.InputJsonValue,
+        keys: keys as Prisma.InputJsonValue,
+      },
     });
 
     logger.info('WhatsApp session synced to DB');
