@@ -4,6 +4,7 @@ import makeWASocket, {
   makeCacheableSignalKeyStore,
   useMultiFileAuthState,
   WASocket,
+  proto,
 } from '@whiskeysockets/baileys';
 import { Boom } from '@hapi/boom';
 import { prisma, Prisma } from '../config/database';
@@ -19,10 +20,58 @@ let isConnected = false;
 let reconnectTimer: ReturnType<typeof setTimeout> | null = null;
 let onMessageCallback: ((phone: string, body: string) => Promise<void>) | null = null;
 
-// LID → real phone mapping built up as messages arrive
-const lidPhoneMap = new Map<string, string>();
+// Simple message store so getMessage works on retries
+const msgStore = new Map<string, proto.IMessage>();
 
 const AUTH_DIR = path.join(process.cwd(), '.baileys-auth');
+
+// ─── Phone helpers ────────────────────────────
+/**
+ * Convert a JID to a stable session identifier.
+ * - @s.whatsapp.net → phone number with country code
+ * - @lid            → "lid_XXXX" (WhatsApp internal ID — number is private)
+ * Returns null if the JID is a group or unrecognizable.
+ */
+function jidToSessionPhone(jid: string): string | null {
+  if (!jid) return null;
+  if (jid.endsWith('@g.us')) return null;
+  if (jid === 'status@broadcast') return null;
+
+  if (jid.includes('@lid')) {
+    // Use lid_ prefix as stable identifier — number is intentionally hidden
+    return 'lid_' + jid.split('@')[0];
+  }
+
+  if (jid.endsWith('@s.whatsapp.net')) {
+    let raw = jid.split('@')[0].split(':')[0];
+    // Fix Mexican numbers: 521XXXXXXXXXX (13 digits) → 52XXXXXXXXXX (12 digits)
+    if (raw.startsWith('521') && raw.length === 13) {
+      raw = '52' + raw.slice(3);
+    }
+    return raw;
+  }
+
+  return null;
+}
+
+/**
+ * Convert a phone/lid identifier back to a JID for sending.
+ * If it starts with "lid_", use the original @lid JID directly.
+ * Otherwise build @s.whatsapp.net JID.
+ */
+function sessionPhoneToJid(phone: string, originalJid?: string): string {
+  // @lid user — reply to the original JID directly (this is the key fix)
+  if (phone.startsWith('lid_') && originalJid) {
+    return originalJid;
+  }
+
+  // Normal phone — fix Mexican numbers then build JID
+  let digits = phone.replace(/\D/g, '');
+  if (digits.startsWith('521') && digits.length === 13) {
+    digits = '52' + digits.slice(3);
+  }
+  return `${digits}@s.whatsapp.net`;
+}
 
 // ─── DB Auth State ────────────────────────────
 async function syncAuthToDB(): Promise<void> {
@@ -82,34 +131,6 @@ async function restoreAuthFromDB(): Promise<boolean> {
   }
 }
 
-// ─── Resolve phone from JID ───────────────────
-// Handles both @s.whatsapp.net and @lid formats
-function resolvePhone(jid: string, participant?: string): string | null {
-  // Normal JID — extract phone directly
-  if (jid.endsWith('@s.whatsapp.net')) {
-    return jid.replace('@s.whatsapp.net', '');
-  }
-
-  // @lid format — check our map first
-  if (jid.endsWith('@lid')) {
-    // Check if we already resolved this LID
-    const cached = lidPhoneMap.get(jid);
-    if (cached) return cached;
-
-    // participant field sometimes contains the real JID
-    if (participant?.endsWith('@s.whatsapp.net')) {
-      const phone = participant.replace('@s.whatsapp.net', '');
-      lidPhoneMap.set(jid, phone);
-      logger.info(`[WA] LID ${jid} → ${phone} (via participant)`);
-      return phone;
-    }
-
-    return null; // Cannot resolve yet
-  }
-
-  return null;
-}
-
 // ─── Connect ──────────────────────────────────
 export async function connectWhatsApp(
   onMessage: (phone: string, body: string) => Promise<void>
@@ -141,6 +162,11 @@ export async function connectWhatsApp(
     browser: ['OLIMPO', 'Chrome', '120.0'],
     syncFullHistory: false,
     keepAliveIntervalMs: 15_000,
+    // Provide stored messages for retry handling
+    getMessage: async (key) => {
+      const stored = msgStore.get(key.id ?? '');
+      return stored ?? { conversation: '' };
+    },
   });
 
   // ── Creds update ─────────────────────────────
@@ -184,77 +210,78 @@ export async function connectWhatsApp(
     }
   });
 
-  // ── Learn LID → phone from contact updates ────
-  // This is the key: when WhatsApp sends contact info,
-  // we learn the real phone behind each LID
-  sock.ev.on('contacts.update', (contacts) => {
-    for (const contact of contacts) {
-      if (contact.id?.endsWith('@s.whatsapp.net') && contact.lid) {
-        const phone = contact.id.replace('@s.whatsapp.net', '');
-        lidPhoneMap.set(contact.lid, phone);
-        logger.info(`[WA] Contacto aprendido: LID ${contact.lid} → ${phone}`);
-      }
-    }
-  });
-
-  sock.ev.on('contacts.upsert', (contacts) => {
-    for (const contact of contacts) {
-      if (contact.id?.endsWith('@s.whatsapp.net') && contact.lid) {
-        const phone = contact.id.replace('@s.whatsapp.net', '');
-        lidPhoneMap.set(contact.lid, phone);
-        logger.info(`[WA] Contacto upsert: LID ${contact.lid} → ${phone}`);
-      }
-    }
-  });
-
   // ── Incoming messages ─────────────────────────
   sock.ev.on('messages.upsert', async ({ messages, type }) => {
+    logger.info(`[WA] messages.upsert type=${type} count=${messages.length}`);
     if (type !== 'notify') return;
 
     for (const msg of messages) {
       if (msg.key.fromMe) continue;
-      if (msg.key.remoteJid?.endsWith('@g.us')) continue;
+
+      const remoteJid = msg.key.remoteJid ?? '';
+
+      if (remoteJid.endsWith('@g.us')) continue;
+      if (remoteJid === 'status@broadcast') continue;
       if (!msg.message) continue;
 
-      const rawJid      = msg.key.remoteJid ?? '';
-      const participant = msg.key.participant ?? '';
-
-      const phone = resolvePhone(rawJid, participant);
-
-      if (!phone) {
-        logger.warn(`[WA] No se pudo resolver JID: ${rawJid} — esperando contacto...`);
-
-        // Request contact info so next message resolves correctly
-        if (sock && rawJid) {
-          try {
-            await sock.updateProfilePicture(rawJid, Buffer.alloc(0)).catch(() => undefined);
-          } catch { /* ignore */ }
+      // Cache message for retry handling
+      if (msg.key.id && msg.message) {
+        msgStore.set(msg.key.id, msg.message);
+        if (msgStore.size > 200) {
+          const oldest = msgStore.keys().next().value;
+          if (oldest) msgStore.delete(oldest);
         }
+      }
+
+      // Get stable session identifier
+      const sessionPhone = jidToSessionPhone(remoteJid);
+      if (!sessionPhone) {
+        logger.warn(`[WA] JID no reconocido: ${remoteJid}`);
         continue;
       }
 
-      const body =
+      // Extract text content
+      const body = (
         msg.message.conversation ??
         msg.message.extendedTextMessage?.text ??
         msg.message.imageMessage?.caption ??
-        '';
+        ''
+      ).trim();
 
-      if (!body.trim()) continue;
+      if (!body) {
+        logger.info(`[WA] Mensaje sin texto ignorado (${remoteJid})`);
+        continue;
+      }
 
-      logger.info(`[WA] ✉️  De: ${phone} | Texto: "${body.slice(0, 80)}"`);
+      const pushName = msg.pushName ?? '';
+      logger.info(`[WA] ✉️  De: ${sessionPhone} (${pushName}) | "${body.slice(0, 80)}"`);
+
+      // Store original JID so we can reply correctly (especially for @lid)
+      // We pass the original remoteJid as part of the phone key so the handler
+      // can use it when calling WhatsAppAdapter.send()
+      // Convention: for @lid users, sessionPhone = "lid_XXXX"
+      // The send() method receives this and looks up the original JID
+
+      // Store mapping lid → original jid for reply
+      if (remoteJid.includes('@lid')) {
+        lidJidMap.set(sessionPhone, remoteJid);
+      }
 
       if (onMessageCallback) {
-        await onMessageCallback(phone, body).catch(err =>
-          logger.error('[WA] Error procesando mensaje', { err, phone })
+        await onMessageCallback(sessionPhone, body).catch(err =>
+          logger.error('[WA] Error procesando mensaje', { err, sessionPhone })
         );
       }
     }
   });
 }
 
+// Map to store lid_XXX → original @lid JID for replies
+const lidJidMap = new Map<string, string>();
+
 // ─── Send message ─────────────────────────────
 export interface SendMessageOptions {
-  to: string;
+  to: string;       // sessionPhone (phone number or "lid_XXX")
   body: string;
   studentId?: string;
   type?: string;
@@ -267,9 +294,11 @@ export const WhatsAppAdapter = {
       return;
     }
 
-    // Always send to @s.whatsapp.net — never to @lid
-    const cleanPhone = opts.to.replace(/[^0-9]/g, '');
-    const jid        = `${cleanPhone}@s.whatsapp.net`;
+    // Resolve the correct JID to send to
+    const originalLidJid = lidJidMap.get(opts.to);
+    const jid = sessionPhoneToJid(opts.to, originalLidJid);
+
+    logger.info(`[WA] Enviando a ${opts.to} → jid=${jid}`);
 
     try {
       await sock.sendMessage(jid, { text: opts.body });
@@ -283,9 +312,9 @@ export const WhatsAppAdapter = {
         },
       });
 
-      logger.info(`[WA] ✅ Enviado a ${cleanPhone} (${opts.type})`);
+      logger.info(`[WA] ✅ Enviado a ${jid} (${opts.type})`);
     } catch (err) {
-      logger.error(`[WA] Error enviando a ${cleanPhone}`, { err });
+      logger.error(`[WA] Error enviando a ${jid}`, { err });
       await prisma.notificationLog.create({
         data: {
           phone:     opts.to,
