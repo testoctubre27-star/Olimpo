@@ -115,9 +115,10 @@ model Teacher {
   createdAt   DateTime @default(now())
   updatedAt   DateTime @updatedAt
 
-  user         User           @relation(fields: [userId], references: [id])
+  user          User           @relation(fields: [userId], references: [id])
   scheduleSlots ScheduleSlot[]
-  students     Student[]
+  schedules     Schedule[]
+  students      Student[]
 
   @@map("teachers")
 }
@@ -143,14 +144,17 @@ model ModalityConfig {
 model Schedule {
   id         String   @id @default(cuid())
   modalityId String
-  dayOfWeek  Int      // 0=Sun … 6=Sat
+  teacherId  String?  // Teacher who owns this schedule
+  dayOfWeek  Int      // 0=Sun ... 6=Sat
   startTime  String   // "09:00"
   endTime    String   // "10:00"
+  capacity   Int      @default(8) // Max students for this specific slot
   isActive   Boolean  @default(true)
   createdAt  DateTime @default(now())
   updatedAt  DateTime @updatedAt
 
   modality     ModalityConfig @relation(fields: [modalityId], references: [id])
+  teacher      Teacher?       @relation(fields: [teacherId], references: [id])
   slots        ScheduleSlot[]
   waitingList  WaitingList[]
 

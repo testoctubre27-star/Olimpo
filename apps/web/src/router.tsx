@@ -14,6 +14,7 @@ import SchedulesPage from './pages/schedules/SchedulesPage';
 import PaymentsPage from './pages/payments/PaymentsPage';
 import ReportsPage from './pages/reports/ReportsPage';
 import MyStudentsPage from './pages/teachers/MyStudentsPage';
+import MySchedulesPage from './pages/teachers/MySchedulesPage';
 import NotFoundPage from './pages/NotFoundPage';
 
 // ─── Auth guard ───────────────────────────────
@@ -57,7 +58,8 @@ export const router = createBrowserRouter([
           {
             element: <RequireAuth roles={['ADMIN', 'TEACHER']} />,
             children: [
-              { path: 'my-students', element: <MyStudentsPage /> },
+              { path: 'my-students',  element: <MyStudentsPage /> },
+              { path: 'my-schedules', element: <MySchedulesPage /> },
             ],
           },
         ],

@@ -83,7 +83,9 @@ export const StudentService = {
     });
     if (!schedule) throw new NotFoundError('Horario');
 
-    if (schedule.slots.length >= schedule.modality.maxCapacity) {
+    // Use schedule.capacity (set by teacher) — falls back to modality max if not set
+    const maxCapacity = schedule.capacity ?? schedule.modality.maxCapacity;
+    if (schedule.slots.length >= maxCapacity) {
       throw new ConflictError('El horario seleccionado ya no tiene cupo disponible');
     }
 

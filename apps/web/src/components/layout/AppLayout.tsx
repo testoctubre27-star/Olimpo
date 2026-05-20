@@ -2,7 +2,7 @@ import { Outlet, NavLink, useNavigate } from 'react-router-dom';
 import {
   LayoutDashboard, Users, GraduationCap, Calendar,
   CreditCard, BarChart3, LogOut, ChevronRight,
-  BookOpen, Waves,
+  BookOpen, Waves, CalendarPlus,
 } from 'lucide-react';
 import { useAuthStore } from '../../store/auth.store';
 import { ToastContainer } from '../ui/Toast';
@@ -22,7 +22,8 @@ const navItems: NavItem[] = [
   { to: '/schedules',   icon: Calendar,         label: 'Horarios',  roles: ['ADMIN'] },
   { to: '/payments',    icon: CreditCard,       label: 'Pagos',     roles: ['ADMIN'] },
   { to: '/reports',     icon: BarChart3,        label: 'Reportes',  roles: ['ADMIN'] },
-  { to: '/my-students', icon: BookOpen,         label: 'Mis alumnos', roles: ['TEACHER'] },
+  { to: '/my-students',  icon: BookOpen,      label: 'Mis alumnos',  roles: ['TEACHER'] },
+  { to: '/my-schedules', icon: CalendarPlus,   label: 'Mis horarios', roles: ['TEACHER'] },
 ];
 
 export default function AppLayout() {
