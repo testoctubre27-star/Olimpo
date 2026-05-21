@@ -141,6 +141,21 @@ model ModalityConfig {
   @@map("modality_configs")
 }
 
+// Free-form services not tied to the Modality enum
+model Service {
+  id          String   @id @default(cuid())
+  name        String
+  description String?
+  monthlyFee  Decimal  @db.Decimal(10, 2)
+  maxCapacity Int
+  isActive    Boolean  @default(true)
+  icon        String?  // emoji or icon identifier
+  createdAt   DateTime @default(now())
+  updatedAt   DateTime @updatedAt
+
+  @@map("services")
+}
+
 // A recurring time slot on a given weekday
 model Schedule {
   id         String   @id @default(cuid())
