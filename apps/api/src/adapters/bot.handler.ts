@@ -4,21 +4,34 @@ import { WhatsAppAdapter } from './whatsapp.adapter';
 import { templates } from './templates';
 import { logger } from '../config/logger';
 
-// Maps user text input → Modality enum (real OLIMPO modalities)
+// Maps user text input → Modality enum
 const MODALITY_MAP: Record<string, Modality> = {
   '1': 'BABY_PHASE1',
   '2': 'BABY_PHASE2',
   '3': 'BABY_PHASE3',
   '4': 'GROUP_CHILD',
-  '5': 'FREE_ACCESS',
-  '6': 'AQUA_THERAPY',
-  '7': 'GROUP_ADULT',
+  '5': 'GROUP_ADULT',
+  '6': 'FREE_ACCESS',
+  '7': 'AQUA_THERAPY',
 };
+
+// Fetches active summer courses for bot menu
+async function getActiveCourses() {
+  const courses = await prisma.summerCourse.findMany({
+    where: { status: 'ACTIVE' },
+    include: {
+      enrollments: { where: { status: 'CONFIRMED' } },
+      teachers: { include: { teacher: { include: { user: { select: { name: true } } } } } },
+    },
+    orderBy: { startDate: 'asc' },
+  });
+
+  return courses.filter(c => c.enrollments.length < c.maxCapacity);
+}
 
 export async function handleIncomingMessage(phone: string, body: string): Promise<void> {
   const text = body.trim().toUpperCase();
 
-  // Get or create bot session
   let session = await prisma.botSession.findUnique({ where: { phone } });
   if (!session) {
     session = await prisma.botSession.create({
@@ -49,38 +62,68 @@ export async function handleIncomingMessage(phone: string, body: string): Promis
         where: { phone },
         data: { state: ConversationState.AWAITING_MODALITY, data: { name } },
       });
-      await WhatsAppAdapter.send({ to: phone, body: templates.askModality(), type: 'ASK_MODALITY' });
+      await WhatsAppAdapter.send({ to: phone, body: await templates.askModality(), type: 'ASK_MODALITY' });
       break;
     }
 
     case ConversationState.AWAITING_MODALITY: {
+      const sessionData = (session.data as Record<string, string>) ?? {};
+      const activeCourses = await getActiveCourses();
+
+      // Check if user selected a summer course
+      const courseIndex = parseInt(text) - 8; // Options 1-7 are modalities, 8+ are courses
+      if (activeCourses.length > 0 && courseIndex >= 0 && courseIndex < activeCourses.length) {
+        const course = activeCourses[courseIndex];
+
+        await prisma.botSession.update({
+          where: { phone },
+          data: {
+            state: 'AWAITING_REGULATION_ACCEPT' as ConversationState,
+            data: { ...sessionData, courseId: course.id, isSummerCourse: 'true' },
+          },
+        });
+
+        const dateOpts: Intl.DateTimeFormatOptions = { day: '2-digit', month: 'long', year: 'numeric' };
+        const teachers = course.teachers.map(t => t.teacher.user.name).join(', ');
+        const infoMsg =
+          `¡Excelente elección! 🏊\n\n` +
+          `*${course.name}*\n\n` +
+          `${course.description ? course.description + '\n\n' : ''}` +
+          `📅 Inicio: ${new Date(course.startDate).toLocaleDateString('es-MX', dateOpts)}\n` +
+          `📅 Fin: ${new Date(course.endDate).toLocaleDateString('es-MX', dateOpts)}\n` +
+          `⏰ Periodo: ${course.period}\n` +
+          `${course.schedule ? `🕐 Horario: ${course.schedule}\n` : ''}` +
+          `👨‍🏫 Instructor(es): ${teachers || 'Por asignar'}\n` +
+          `💰 Costo total: $${Number(course.price).toLocaleString('es-MX')} MXN\n` +
+          `📊 Lugares disponibles: ${course.maxCapacity - course.enrollments.length}\n\n` +
+          `Para continuar, por favor lee y acepta nuestro reglamento:`;
+
+        await WhatsAppAdapter.send({ to: phone, body: infoMsg, type: 'COURSE_INFO' });
+        await WhatsAppAdapter.send({ to: phone, body: templates.sendRegulation(), type: 'REGULATION' });
+        break;
+      }
+
+      // Regular modality selection
       const modality = MODALITY_MAP[text];
       if (!modality) {
         await WhatsAppAdapter.send({ to: phone, body: templates.unknown(), type: 'RETRY' });
         break;
       }
-      const sessionData = (session.data as Record<string, string>) ?? {};
+
       await prisma.botSession.update({
         where: { phone },
-        data: {
-          state: ConversationState.AWAITING_SCHEDULE,
-          data: { ...sessionData, modality },
-        },
+        data: { state: ConversationState.AWAITING_SCHEDULE, data: { ...sessionData, modality } },
       });
 
-      // Fetch available schedules for chosen modality
       const schedules = await prisma.schedule.findMany({
         where: { modality: { modality }, isActive: true },
-        include: {
-          slots: { where: { isActive: true } },
-          modality: true,
-        },
+        include: { slots: { where: { isActive: true } }, modality: true },
       });
 
       const DAYS = ['Dom', 'Lun', 'Mar', 'Mié', 'Jue', 'Vie', 'Sáb'];
       const available = schedules
-        .filter((s) => s.slots.length < s.modality.maxCapacity)
-        .map((s) => ({ day: DAYS[s.dayOfWeek], time: s.startTime, id: s.id }));
+        .filter(s => s.slots.length < (s.capacity ?? s.modality.maxCapacity))
+        .map(s => ({ day: DAYS[s.dayOfWeek], time: s.startTime, id: s.id }));
 
       if (available.length === 0) {
         await WhatsAppAdapter.send({
@@ -117,10 +160,7 @@ export async function handleIncomingMessage(phone: string, body: string): Promis
 
       await prisma.botSession.update({
         where: { phone },
-        data: {
-          state: ConversationState.AWAITING_REGULATION_ACCEPT,
-          data: { ...sessionData, scheduleId: chosen.id },
-        },
+        data: { state: ConversationState.AWAITING_REGULATION_ACCEPT, data: { ...sessionData, scheduleId: chosen.id } },
       });
 
       await WhatsAppAdapter.send({ to: phone, body: templates.sendRegulation(), type: 'REGULATION' });
@@ -138,43 +178,78 @@ export async function handleIncomingMessage(phone: string, body: string): Promis
       }
 
       const sessionData = (session.data as Record<string, string>) ?? {};
+      const isSummerCourse = sessionData.isSummerCourse === 'true';
 
       await prisma.regulationSignature.create({
         data: { studentPhone: phone, regulationVersion: '1.0' },
       });
 
-      await prisma.student.upsert({
-        where: { phone },
-        update: {
-          name: sessionData.name,
-          modality: sessionData.modality as Modality,
-          conversationState: ConversationState.PENDING_PAYMENT_CONFIRMATION,
-          regulationAcceptedAt: new Date(),
-          regulationVersion: '1.0',
-          conversationData: sessionData,
-        },
-        create: {
-          phone,
-          name: sessionData.name,
-          modality: sessionData.modality as Modality,
-          conversationState: ConversationState.PENDING_PAYMENT_CONFIRMATION,
-          regulationAcceptedAt: new Date(),
-          regulationVersion: '1.0',
-          conversationData: sessionData,
-        },
-      });
+      if (isSummerCourse) {
+        // Create summer course enrollment
+        const course = await prisma.summerCourse.findUnique({ where: { id: sessionData.courseId } });
 
-      await prisma.botSession.update({
-        where: { phone },
-        data: { state: ConversationState.PENDING_PAYMENT_CONFIRMATION },
-      });
+        if (course) {
+          await prisma.summerCourseEnrollment.upsert({
+            where: { courseId_studentPhone: { courseId: course.id, studentPhone: phone } },
+            update: { status: 'PENDING', studentName: sessionData.name },
+            create: {
+              courseId:     course.id,
+              studentPhone: phone,
+              studentName:  sessionData.name,
+              status:       'PENDING',
+            },
+          });
 
-      await WhatsAppAdapter.send({
-        to: phone,
-        studentId: undefined,
-        body: templates.regulationConfirmed(sessionData.name),
-        type: 'REGULATION_CONFIRMED',
-      });
+          await prisma.botSession.update({
+            where: { phone },
+            data: { state: ConversationState.PENDING_PAYMENT_CONFIRMATION },
+          });
+
+          await WhatsAppAdapter.send({
+            to: phone,
+            body:
+              `¡Gracias, ${sessionData.name}! ✅ Tu interés en el *${course.name}* ha sido registrado.\n\n` +
+              `Un administrador revisará tu solicitud y te contactará para confirmar tu inscripción y el pago de $${Number(course.price).toLocaleString('es-MX')} MXN.\n\n` +
+              `¡Gracias por elegir *OLIMPO*! 🏊`,
+            type: 'COURSE_INTEREST',
+          });
+        }
+      } else {
+        // Regular student enrollment
+        const modality = sessionData.modality as Modality;
+
+        await prisma.student.upsert({
+          where: { phone },
+          update: {
+            name: sessionData.name,
+            modality,
+            conversationState: ConversationState.PENDING_PAYMENT_CONFIRMATION,
+            regulationAcceptedAt: new Date(),
+            regulationVersion: '1.0',
+            conversationData: sessionData,
+          },
+          create: {
+            phone,
+            name: sessionData.name,
+            modality,
+            conversationState: ConversationState.PENDING_PAYMENT_CONFIRMATION,
+            regulationAcceptedAt: new Date(),
+            regulationVersion: '1.0',
+            conversationData: sessionData,
+          },
+        });
+
+        await prisma.botSession.update({
+          where: { phone },
+          data: { state: ConversationState.PENDING_PAYMENT_CONFIRMATION },
+        });
+
+        await WhatsAppAdapter.send({
+          to: phone,
+          body: templates.regulationConfirmed(sessionData.name),
+          type: 'REGULATION_CONFIRMED',
+        });
+      }
       break;
     }
 
@@ -184,7 +259,7 @@ export async function handleIncomingMessage(phone: string, body: string): Promis
     case ConversationState.PENDING_PAYMENT_CONFIRMATION: {
       await WhatsAppAdapter.send({
         to: phone,
-        body: `Hola, recibimos tu mensaje. 👋\n\nUn administrador de *OLIMPO* te atenderá en breve.\n\nTambién puedes escribirnos *ESTADO* para consultar tu cuenta.`,
+        body: `Hola, recibimos tu mensaje. 👋\n\nUn administrador de *OLIMPO* te atenderá en breve.`,
         type: 'HANDOFF',
       });
       break;

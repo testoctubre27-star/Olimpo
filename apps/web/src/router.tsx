@@ -16,6 +16,7 @@ import ReportsPage from './pages/reports/ReportsPage';
 import MyStudentsPage from './pages/teachers/MyStudentsPage';
 import MySchedulesPage from './pages/teachers/MySchedulesPage';
 import NotFoundPage from './pages/NotFoundPage';
+import CoursesPage from './pages/courses/CoursesPage';
 
 // ─── Auth guard ───────────────────────────────
 function RequireAuth({ roles }: { roles?: UserRole[] }) {

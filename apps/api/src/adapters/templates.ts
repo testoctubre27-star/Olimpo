@@ -53,8 +53,9 @@ export const templates = {
     );
   },
 
-  askModality(): string {
-    return (
+  async askModality(): Promise<string> {
+    // Base modalities (always shown)
+    let msg =
       `¡Perfecto! ¿Qué modalidad te interesa?\n\n` +
       `1️⃣ *Natación Bebés Fase 1* — 4 a 12 meses · $1,100/mes\n` +
       `     Motricidad gruesa · 30 min · 2 veces/semana · Maestra dedicada\n\n` +
@@ -69,9 +70,33 @@ export const templates = {
       `6️⃣ *Terapia Acuática* — $1,200/mes o $350 por sesión\n` +
       `     Rehabilitación y movilidad · Lesiones, adultos mayores o movilidad reducida\n\n` +
       `7️⃣ *Natación Adultos Grupal* — $800/mes\n` +
-      `     60 min · 2 veces/semana\n\n` +
-      `Responde con el *número* de tu elección.`
-    );
+      `     60 min · 2 veces/semana`;
+
+    // Dynamically append active summer courses
+    try {
+      const { prisma } = await import('../config/database');
+      const courses = await prisma.summerCourse.findMany({
+        where: { status: 'ACTIVE' },
+        include: { enrollments: { where: { status: 'CONFIRMED' } } },
+        orderBy: { startDate: 'asc' },
+      });
+
+      const available = courses.filter(c => c.enrollments.length < c.maxCapacity);
+      if (available.length > 0) {
+        msg += `\n\n🌊 *CURSOS DE VERANO DISPONIBLES:*\n`;
+        available.forEach((c, i) => {
+          const dateOpts: Intl.DateTimeFormatOptions = { day: '2-digit', month: 'short' };
+          const start = new Date(c.startDate).toLocaleDateString('es-MX', dateOpts);
+          const end   = new Date(c.endDate).toLocaleDateString('es-MX', dateOpts);
+          msg += `\n${i + 8}️⃣ *${c.name}* — $${Number(c.price).toLocaleString('es-MX')} total\n`;
+          msg += `     ${start} al ${end} · ${c.period}\n`;
+          msg += `     Lugares: ${c.maxCapacity - c.enrollments.length} disponibles`;
+        });
+      }
+    } catch { /* If DB fails, show without courses */ }
+
+    msg += `\n\nResponde con el *número* de tu elección.`;
+    return msg;
   },
 
   askSchedule(available: { day: string; time: string }[]): string {
