@@ -1,6 +1,5 @@
-import { forwardRef, ReactNode, ButtonHTMLAttributes, HTMLAttributes } from 'react';
+import { forwardRef, ReactNode, ButtonHTMLAttributes, HTMLAttributes, CSSProperties } from 'react';
 import { Loader2 } from 'lucide-react';
-import { clsx } from 'clsx';
 
 // ─── Button ───────────────────────────────────
 
@@ -15,39 +14,94 @@ interface ButtonProps extends ButtonHTMLAttributes<HTMLButtonElement> {
   iconRight?: ReactNode;
 }
 
-const btnBase = [
-  'inline-flex items-center justify-center gap-2 font-medium',
-  'rounded-[var(--radius-md)] transition-all duration-150',
-  'focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-offset-1',
-  'disabled:opacity-50 disabled:pointer-events-none select-none',
-].join(' ');
-
-const btnVariants: Record<ButtonVariant, string> = {
-  primary:   'bg-[var(--primary)] text-white hover:bg-[var(--primary-hover)] focus-visible:ring-[var(--primary)] shadow-sm active:scale-[0.98]',
-  secondary: 'bg-white border border-[var(--border)] text-[var(--text-primary)] hover:bg-[var(--bg)] focus-visible:ring-[var(--border-strong)] shadow-[var(--shadow-sm)]',
-  ghost:     'text-[var(--text-secondary)] hover:bg-[var(--border)] hover:text-[var(--text-primary)] focus-visible:ring-[var(--border-strong)]',
-  danger:    'bg-[var(--danger)] text-white hover:bg-red-700 focus-visible:ring-[var(--danger)] shadow-sm active:scale-[0.98]',
+const variantStyles: Record<ButtonVariant, CSSProperties> = {
+  primary: {
+    background: 'var(--primary)',
+    color: 'white',
+    border: 'none',
+    boxShadow: '0 1px 3px rgba(0,87,255,0.25)',
+  },
+  secondary: {
+    background: 'var(--surface)',
+    color: 'var(--text-primary)',
+    border: '1px solid var(--border)',
+    boxShadow: 'var(--shadow-sm)',
+  },
+  ghost: {
+    background: 'transparent',
+    color: 'var(--text-secondary)',
+    border: 'none',
+  },
+  danger: {
+    background: 'var(--danger)',
+    color: 'white',
+    border: 'none',
+    boxShadow: '0 1px 3px rgba(192,57,43,0.25)',
+  },
 };
 
-const btnSizes: Record<ButtonSize, string> = {
-  sm:  'h-8  px-3   text-[13px]',
-  md:  'h-9  px-4   text-[14px]',
-  lg:  'h-10 px-5   text-[14px]',
+const sizeStyles: Record<ButtonSize, CSSProperties> = {
+  sm:  { height: 32, padding: '0 12px', fontSize: 13 },
+  md:  { height: 36, padding: '0 16px', fontSize: 14 },
+  lg:  { height: 40, padding: '0 20px', fontSize: 14 },
 };
 
 export const Button = forwardRef<HTMLButtonElement, ButtonProps>(
-  ({ variant = 'primary', size = 'md', loading, icon, iconRight, children, className, disabled, ...props }, ref) => (
-    <button
-      ref={ref}
-      className={clsx(btnBase, btnVariants[variant], btnSizes[size], className)}
-      disabled={disabled || loading}
-      {...props}
-    >
-      {loading ? <Loader2 size={14} className="animate-spin" /> : icon}
-      {children}
-      {!loading && iconRight}
-    </button>
-  )
+  ({ variant = 'primary', size = 'md', loading, icon, iconRight, children, style, disabled, onMouseEnter, onMouseLeave, ...props }, ref) => {
+    const base: CSSProperties = {
+      display: 'inline-flex',
+      alignItems: 'center',
+      justifyContent: 'center',
+      gap: 6,
+      fontFamily: 'var(--font-sans)',
+      fontWeight: 600,
+      borderRadius: 'var(--radius-md)',
+      cursor: disabled || loading ? 'not-allowed' : 'pointer',
+      opacity: disabled || loading ? 0.55 : 1,
+      transition: 'background .15s, opacity .15s, box-shadow .15s, transform .1s',
+      outline: 'none',
+      whiteSpace: 'nowrap',
+      letterSpacing: '-0.1px',
+      ...variantStyles[variant],
+      ...sizeStyles[size],
+      ...style,
+    };
+
+    const handleMouseEnter = (e: React.MouseEvent<HTMLButtonElement>) => {
+      if (!disabled && !loading) {
+        const el = e.currentTarget;
+        if (variant === 'primary')    el.style.background = 'var(--primary-hover)';
+        if (variant === 'secondary')  el.style.background = 'var(--bg)';
+        if (variant === 'ghost')      { el.style.background = 'var(--border)'; el.style.color = 'var(--text-primary)'; }
+        if (variant === 'danger')     el.style.background = '#a93226';
+      }
+      onMouseEnter?.(e);
+    };
+
+    const handleMouseLeave = (e: React.MouseEvent<HTMLButtonElement>) => {
+      const el = e.currentTarget;
+      if (variant === 'primary')    el.style.background = 'var(--primary)';
+      if (variant === 'secondary')  el.style.background = 'var(--surface)';
+      if (variant === 'ghost')      { el.style.background = 'transparent'; el.style.color = 'var(--text-secondary)'; }
+      if (variant === 'danger')     el.style.background = 'var(--danger)';
+      onMouseLeave?.(e);
+    };
+
+    return (
+      <button
+        ref={ref}
+        style={base}
+        disabled={disabled || loading}
+        onMouseEnter={handleMouseEnter}
+        onMouseLeave={handleMouseLeave}
+        {...props}
+      >
+        {loading ? <Loader2 size={14} style={{ animation: 'spin .7s linear infinite' }} /> : icon}
+        {children}
+        {!loading && iconRight}
+      </button>
+    );
+  }
 );
 Button.displayName = 'Button';
 
@@ -55,23 +109,29 @@ Button.displayName = 'Button';
 
 type BadgeVariant = 'success' | 'warning' | 'danger' | 'info' | 'default';
 
-const badgeStyles: Record<BadgeVariant, string> = {
-  success: 'bg-[var(--success-bg)] text-[var(--success)]',
-  warning: 'bg-[var(--warning-bg)] text-[var(--warning)]',
-  danger:  'bg-[var(--danger-bg)]  text-[var(--danger)]',
-  info:    'bg-[var(--info-bg)]    text-[var(--info)]',
-  default: 'bg-[var(--border)]     text-[var(--text-secondary)]',
+const badgeStyles: Record<BadgeVariant, CSSProperties> = {
+  success: { background: 'var(--success-bg)', color: 'var(--success)' },
+  warning: { background: 'var(--warning-bg)', color: 'var(--warning)' },
+  danger:  { background: 'var(--danger-bg)',  color: 'var(--danger)'  },
+  info:    { background: 'var(--info-bg)',     color: 'var(--info)'    },
+  default: { background: 'var(--border)',      color: 'var(--text-secondary)' },
 };
 
 interface BadgeProps { variant?: BadgeVariant; children: ReactNode; dot?: boolean; }
 
 export function Badge({ variant = 'default', dot, children }: BadgeProps) {
   return (
-    <span className={clsx(
-      'inline-flex items-center gap-1.5 px-2 py-0.5 rounded-full text-[11px] font-semibold uppercase tracking-wide whitespace-nowrap',
-      badgeStyles[variant]
-    )}>
-      {dot && <span className="w-1.5 h-1.5 rounded-full bg-current opacity-80" />}
+    <span style={{
+      display: 'inline-flex', alignItems: 'center', gap: 5,
+      padding: '2px 8px',
+      borderRadius: 99,
+      fontSize: 11, fontWeight: 700,
+      textTransform: 'uppercase', letterSpacing: '0.05em',
+      whiteSpace: 'nowrap',
+      fontFamily: 'var(--font-sans)',
+      ...badgeStyles[variant],
+    }}>
+      {dot && <span style={{ width: 5, height: 5, borderRadius: '50%', background: 'currentColor', opacity: 0.8, flexShrink: 0 }} />}
       {children}
     </span>
   );
@@ -79,18 +139,19 @@ export function Badge({ variant = 'default', dot, children }: BadgeProps) {
 
 // ─── Card ─────────────────────────────────────
 
-interface CardProps extends HTMLAttributes<HTMLDivElement> {
-  noPad?: boolean;
-}
+interface CardProps extends HTMLAttributes<HTMLDivElement> { noPad?: boolean; }
 
-export function Card({ noPad, className, children, ...props }: CardProps) {
+export function Card({ noPad, style, children, ...props }: CardProps) {
   return (
     <div
-      className={clsx(
-        'bg-[var(--surface)] border border-[var(--border)] rounded-[var(--radius-lg)] shadow-[var(--shadow-sm)]',
-        !noPad && 'p-5',
-        className
-      )}
+      style={{
+        background: 'var(--surface)',
+        border: '1px solid var(--border)',
+        borderRadius: 'var(--radius-lg)',
+        boxShadow: 'var(--shadow-sm)',
+        ...(noPad ? {} : { padding: 20 }),
+        ...style,
+      }}
       {...props}
     >
       {children}
@@ -98,7 +159,7 @@ export function Card({ noPad, className, children, ...props }: CardProps) {
   );
 }
 
-// ─── Stat card ────────────────────────────────
+// ─── StatCard ─────────────────────────────────
 
 interface StatCardProps {
   label: string;
@@ -111,22 +172,17 @@ interface StatCardProps {
 
 export function StatCard({ label, value, delta, positive, icon, color = 'var(--primary-light)' }: StatCardProps) {
   return (
-    <Card className="flex items-start justify-between gap-4 animate-fadeIn">
+    <Card style={{ display: 'flex', alignItems: 'flex-start', justifyContent: 'space-between', gap: 16 }} className="animate-fadeIn">
       <div>
         <p style={{ color: 'var(--text-muted)', fontSize: 13, fontWeight: 500, marginBottom: 6 }}>{label}</p>
-        <p style={{ fontSize: 28, fontWeight: 600, letterSpacing: '-0.5px', color: 'var(--text-primary)' }}>{value}</p>
+        <p style={{ fontSize: 28, fontWeight: 700, letterSpacing: '-0.5px', color: 'var(--text-primary)' }}>{value}</p>
         {delta && (
           <p style={{ fontSize: 12, marginTop: 4, color: positive ? 'var(--success)' : 'var(--danger)', fontWeight: 500 }}>
             {positive ? '↑' : '↓'} {delta}
           </p>
         )}
       </div>
-      <div style={{
-        width: 44, height: 44, borderRadius: 12,
-        background: color,
-        display: 'flex', alignItems: 'center', justifyContent: 'center',
-        flexShrink: 0,
-      }}>
+      <div style={{ width: 44, height: 44, borderRadius: 12, background: color, display: 'flex', alignItems: 'center', justifyContent: 'center', flexShrink: 0 }}>
         {icon}
       </div>
     </Card>
@@ -136,7 +192,7 @@ export function StatCard({ label, value, delta, positive, icon, color = 'var(--p
 // ─── Spinner ──────────────────────────────────
 
 export function Spinner({ size = 20 }: { size?: number }) {
-  return <Loader2 size={size} className="animate-spin" style={{ color: 'var(--primary)' }} />;
+  return <Loader2 size={size} style={{ animation: 'spin .7s linear infinite', color: 'var(--primary)' }} />;
 }
 
 export function PageSpinner() {
@@ -147,7 +203,7 @@ export function PageSpinner() {
   );
 }
 
-// ─── Empty state ──────────────────────────────
+// ─── Empty ────────────────────────────────────
 
 interface EmptyProps { title: string; description?: string; action?: ReactNode; icon?: ReactNode; }
 
@@ -162,19 +218,15 @@ export function Empty({ title, description, action, icon }: EmptyProps) {
   );
 }
 
-// ─── Section header ───────────────────────────
+// ─── SectionHeader ────────────────────────────
 
-interface SectionHeaderProps {
-  title: string;
-  subtitle?: string;
-  actions?: ReactNode;
-}
+interface SectionHeaderProps { title: string; subtitle?: string; actions?: ReactNode; }
 
 export function SectionHeader({ title, subtitle, actions }: SectionHeaderProps) {
   return (
     <div style={{ display: 'flex', alignItems: 'flex-start', justifyContent: 'space-between', gap: 16, marginBottom: 24 }}>
       <div>
-        <h1 style={{ fontSize: 22, fontWeight: 600, letterSpacing: '-0.3px', color: 'var(--text-primary)' }}>{title}</h1>
+        <h1 style={{ fontSize: 22, fontWeight: 700, letterSpacing: '-0.3px', color: 'var(--text-primary)' }}>{title}</h1>
         {subtitle && <p style={{ fontSize: 14, color: 'var(--text-muted)', marginTop: 3 }}>{subtitle}</p>}
       </div>
       {actions && <div style={{ display: 'flex', gap: 8, flexShrink: 0 }}>{actions}</div>}
@@ -184,8 +236,8 @@ export function SectionHeader({ title, subtitle, actions }: SectionHeaderProps) 
 
 // ─── Divider ─────────────────────────────────
 
-export function Divider({ className }: { className?: string }) {
-  return <hr className={clsx('border-[var(--border)]', className)} />;
+export function Divider({ style }: { style?: CSSProperties }) {
+  return <hr style={{ border: 'none', borderTop: '1px solid var(--border)', ...style }} />;
 }
 
 // ─── Input ───────────────────────────────────
@@ -197,18 +249,18 @@ interface InputProps extends React.InputHTMLAttributes<HTMLInputElement> {
 }
 
 export const Input = forwardRef<HTMLInputElement, InputProps>(
-  ({ label, error, icon, className, id, ...props }, ref) => {
+  ({ label, error, icon, style, id, ...props }, ref) => {
     const inputId = id ?? label?.toLowerCase().replace(/\s+/g, '-');
     return (
       <div style={{ display: 'flex', flexDirection: 'column', gap: 6 }}>
         {label && (
-          <label htmlFor={inputId} style={{ fontSize: 13, fontWeight: 500, color: 'var(--text-secondary)' }}>
+          <label htmlFor={inputId} style={{ fontSize: 13, fontWeight: 500, color: 'var(--text-secondary)', fontFamily: 'var(--font-sans)' }}>
             {label}
           </label>
         )}
         <div style={{ position: 'relative' }}>
           {icon && (
-            <span style={{ position: 'absolute', left: 10, top: '50%', transform: 'translateY(-50%)', color: 'var(--text-muted)', display: 'flex' }}>
+            <span style={{ position: 'absolute', left: 10, top: '50%', transform: 'translateY(-50%)', color: 'var(--text-muted)', display: 'flex', pointerEvents: 'none' }}>
               {icon}
             </span>
           )}
@@ -216,10 +268,8 @@ export const Input = forwardRef<HTMLInputElement, InputProps>(
             ref={ref}
             id={inputId}
             style={{
-              width: '100%',
-              height: 38,
-              paddingLeft: icon ? 34 : 12,
-              paddingRight: 12,
+              width: '100%', height: 38,
+              paddingLeft: icon ? 34 : 12, paddingRight: 12,
               fontSize: 14,
               border: `1px solid ${error ? 'var(--danger)' : 'var(--border)'}`,
               borderRadius: 'var(--radius-md)',
@@ -228,10 +278,11 @@ export const Input = forwardRef<HTMLInputElement, InputProps>(
               outline: 'none',
               fontFamily: 'var(--font-sans)',
               transition: 'border-color .15s, box-shadow .15s',
+              boxSizing: 'border-box',
+              ...style,
             }}
             onFocus={e => { e.target.style.borderColor = 'var(--primary)'; e.target.style.boxShadow = '0 0 0 3px var(--primary-light)'; }}
             onBlur={e => { e.target.style.borderColor = error ? 'var(--danger)' : 'var(--border)'; e.target.style.boxShadow = 'none'; }}
-            className={className}
             {...props}
           />
         </div>
@@ -251,12 +302,12 @@ interface SelectProps extends React.SelectHTMLAttributes<HTMLSelectElement> {
 }
 
 export const Select = forwardRef<HTMLSelectElement, SelectProps>(
-  ({ label, error, options, id, ...props }, ref) => {
+  ({ label, error, options, id, style, ...props }, ref) => {
     const selectId = id ?? label?.toLowerCase().replace(/\s+/g, '-');
     return (
       <div style={{ display: 'flex', flexDirection: 'column', gap: 6 }}>
         {label && (
-          <label htmlFor={selectId} style={{ fontSize: 13, fontWeight: 500, color: 'var(--text-secondary)' }}>
+          <label htmlFor={selectId} style={{ fontSize: 13, fontWeight: 500, color: 'var(--text-secondary)', fontFamily: 'var(--font-sans)' }}>
             {label}
           </label>
         )}
@@ -264,7 +315,8 @@ export const Select = forwardRef<HTMLSelectElement, SelectProps>(
           ref={ref}
           id={selectId}
           style={{
-            height: 38, paddingLeft: 10, paddingRight: 28, fontSize: 14,
+            height: 38, paddingLeft: 10, paddingRight: 28,
+            fontSize: 14,
             border: `1px solid ${error ? 'var(--danger)' : 'var(--border)'}`,
             borderRadius: 'var(--radius-md)',
             background: 'var(--surface)',
@@ -273,6 +325,7 @@ export const Select = forwardRef<HTMLSelectElement, SelectProps>(
             cursor: 'pointer',
             outline: 'none',
             width: '100%',
+            ...style,
           }}
           {...props}
         >
