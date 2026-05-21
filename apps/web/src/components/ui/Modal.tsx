@@ -1,4 +1,5 @@
 import { ReactNode, useEffect } from 'react';
+import { createPortal } from 'react-dom';
 import { X } from 'lucide-react';
 import { Button } from './index';
 
@@ -11,7 +12,7 @@ interface ModalProps {
   size?: 'sm' | 'md' | 'lg';
 }
 
-const sizes = { sm: 420, md: 560, lg: 740 };
+const sizes = { sm: 440, md: 580, lg: 760 };
 
 export function Modal({ open, onClose, title, children, footer, size = 'md' }: ModalProps) {
   // Close on Escape
@@ -21,7 +22,7 @@ export function Modal({ open, onClose, title, children, footer, size = 'md' }: M
     return () => window.removeEventListener('keydown', handler);
   }, [open, onClose]);
 
-  // Lock scroll
+  // Lock body scroll
   useEffect(() => {
     document.body.style.overflow = open ? 'hidden' : '';
     return () => { document.body.style.overflow = ''; };
@@ -29,14 +30,20 @@ export function Modal({ open, onClose, title, children, footer, size = 'md' }: M
 
   if (!open) return null;
 
-  return (
+  // Render via portal so it escapes any overflow:hidden parent
+  return createPortal(
     <div
       style={{
-        position: 'fixed', inset: 0, zIndex: 1000,
-        background: 'rgba(15,21,35,0.48)',
-        display: 'flex', alignItems: 'center', justifyContent: 'center',
-        padding: 20,
-        backdropFilter: 'blur(2px)',
+        position: 'fixed',
+        inset: 0,
+        zIndex: 9000,
+        background: 'rgba(15,21,35,0.5)',
+        display: 'flex',
+        alignItems: 'center',
+        justifyContent: 'center',
+        padding: '24px 20px',
+        backdropFilter: 'blur(3px)',
+        WebkitBackdropFilter: 'blur(3px)',
       }}
       onClick={e => { if (e.target === e.currentTarget) onClose(); }}
     >
@@ -48,39 +55,73 @@ export function Modal({ open, onClose, title, children, footer, size = 'md' }: M
           boxShadow: 'var(--shadow-lg)',
           width: '100%',
           maxWidth: sizes[size],
-          maxHeight: '90vh',
+          maxHeight: 'calc(100vh - 48px)',
           display: 'flex',
           flexDirection: 'column',
+          position: 'relative',
         }}
       >
         {/* Header */}
         <div style={{
-          display: 'flex', alignItems: 'center', justifyContent: 'space-between',
-          padding: '18px 22px',
+          display: 'flex',
+          alignItems: 'center',
+          justifyContent: 'space-between',
+          padding: '18px 24px',
           borderBottom: '1px solid var(--border)',
+          flexShrink: 0,
         }}>
-          <h2 style={{ fontSize: 16, fontWeight: 600, color: 'var(--text-primary)' }}>{title}</h2>
-          <Button variant="ghost" size="sm" onClick={onClose} icon={<X size={16} />} style={{ padding: 6, minWidth: 0 }}>
-            <span className="sr-only">Cerrar</span>
-          </Button>
+          <h2 style={{
+            fontSize: 17,
+            fontWeight: 700,
+            color: 'var(--text-primary)',
+            letterSpacing: '-0.2px',
+          }}>
+            {title}
+          </h2>
+          <button
+            onClick={onClose}
+            style={{
+              display: 'flex', alignItems: 'center', justifyContent: 'center',
+              width: 30, height: 30,
+              border: 'none',
+              borderRadius: 'var(--radius-md)',
+              background: 'none',
+              cursor: 'pointer',
+              color: 'var(--text-muted)',
+              transition: 'background .15s, color .15s',
+              flexShrink: 0,
+            }}
+            onMouseEnter={e => { (e.currentTarget as HTMLElement).style.background = 'var(--border)'; (e.currentTarget as HTMLElement).style.color = 'var(--text-primary)'; }}
+            onMouseLeave={e => { (e.currentTarget as HTMLElement).style.background = 'none'; (e.currentTarget as HTMLElement).style.color = 'var(--text-muted)'; }}
+          >
+            <X size={16} />
+          </button>
         </div>
 
         {/* Body */}
-        <div style={{ padding: '20px 22px', overflowY: 'auto', flex: 1 }}>
+        <div style={{
+          padding: '22px 24px',
+          overflowY: 'auto',
+          flex: 1,
+        }}>
           {children}
         </div>
 
         {/* Footer */}
         {footer && (
           <div style={{
-            padding: '14px 22px',
+            padding: '16px 24px',
             borderTop: '1px solid var(--border)',
-            display: 'flex', gap: 8, justifyContent: 'flex-end',
+            display: 'flex',
+            gap: 8,
+            justifyContent: 'flex-end',
+            flexShrink: 0,
           }}>
             {footer}
           </div>
         )}
       </div>
-    </div>
+    </div>,
+    document.body
   );
 }
