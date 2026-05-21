@@ -17,6 +17,7 @@ import MyStudentsPage from './pages/teachers/MyStudentsPage';
 import MySchedulesPage from './pages/teachers/MySchedulesPage';
 import NotFoundPage from './pages/NotFoundPage';
 import CoursesPage from './pages/courses/CoursesPage';
+import ModalitiesPage from './pages/modalities/ModalitiesPage';
 
 // ─── Auth guard ───────────────────────────────
 function RequireAuth({ roles }: { roles?: UserRole[] }) {
@@ -52,7 +53,8 @@ export const router = createBrowserRouter([
               { path: 'schedules', element: <SchedulesPage /> },
               { path: 'payments', element: <PaymentsPage /> },
               { path: 'reports', element: <ReportsPage /> },
-              { path: 'courses', element: <CoursesPage /> },
+              { path: 'courses',     element: <CoursesPage /> },
+              { path: 'modalities', element: <ModalitiesPage /> },
             ],
           },
 
