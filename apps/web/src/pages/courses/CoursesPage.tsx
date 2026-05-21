@@ -117,7 +117,7 @@ export default function CoursesPage() {
       if (form.endDate)     payload.endDate     = new Date(form.endDate).toISOString();
       if (form.period)      payload.period      = form.period;
       if (form.schedule)    payload.schedule    = form.schedule;
-      await updateMutation.mutateAsync(payload);
+      await updateMutation.mutateAsync(payload as { id: string } & Record<string, unknown>);
       toast.success('Curso actualizado'); setEditCourse(null); setForm(emptyForm);
     } catch (err) { toast.error(errMsg(err) ?? 'Error al actualizar'); }
   };
