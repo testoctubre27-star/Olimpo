@@ -15,36 +15,32 @@ import fs from 'fs';
 
 // ─── State ────────────────────────────────────
 let sock: WASocket | null = null;
-let currentQR: string | null = null;
 let isConnected = false;
+let pairingCode: string | null = null;         // 8-digit pairing code
+let pairingPhone: string | null = null;        // Phone number being paired
 let reconnectTimer: ReturnType<typeof setTimeout> | null = null;
 let onMessageCallback: ((phone: string, body: string) => Promise<void>) | null = null;
 
 // Simple message store so getMessage works on retries
 const msgStore = new Map<string, proto.IMessage>();
 
+// LID → original @lid JID map (for reply routing)
+const lidJidMap = new Map<string, string>();
+
 const AUTH_DIR = path.join(process.cwd(), '.baileys-auth');
 
 // ─── Phone helpers ────────────────────────────
-/**
- * Convert a JID to a stable session identifier.
- * - @s.whatsapp.net → phone number with country code
- * - @lid            → "lid_XXXX" (WhatsApp internal ID — number is private)
- * Returns null if the JID is a group or unrecognizable.
- */
 function jidToSessionPhone(jid: string): string | null {
   if (!jid) return null;
   if (jid.endsWith('@g.us')) return null;
   if (jid === 'status@broadcast') return null;
 
   if (jid.includes('@lid')) {
-    // Use lid_ prefix as stable identifier — number is intentionally hidden
     return 'lid_' + jid.split('@')[0];
   }
 
   if (jid.endsWith('@s.whatsapp.net')) {
     let raw = jid.split('@')[0].split(':')[0];
-    // Fix Mexican numbers: 521XXXXXXXXXX (13 digits) → 52XXXXXXXXXX (12 digits)
     if (raw.startsWith('521') && raw.length === 13) {
       raw = '52' + raw.slice(3);
     }
@@ -54,19 +50,9 @@ function jidToSessionPhone(jid: string): string | null {
   return null;
 }
 
-/**
- * Convert a phone/lid identifier back to a JID for sending.
- * If it starts with "lid_", use the original @lid JID directly.
- * Otherwise build @s.whatsapp.net JID.
- */
 function sessionPhoneToJid(phone: string, originalJid?: string): string {
-  // @lid user — reply to the original JID directly (this is the key fix)
-  if (phone.startsWith('lid_') && originalJid) {
-    return originalJid;
-  }
-
-  // Normal phone — fix Mexican numbers then build JID
-  let digits = phone.replace(/\D/g, '');
+  if (phone.startsWith('lid_') && originalJid) return originalJid;
+  let digits = phone.replace(/[^0-9]/g, '');
   if (digits.startsWith('521') && digits.length === 13) {
     digits = '52' + digits.slice(3);
   }
@@ -157,17 +143,36 @@ export async function connectWhatsApp(
       creds: state.creds,
       keys:  makeCacheableSignalKeyStore(state.keys, pinoLogger),
     },
+    // Use pairing code mode (more stable than QR / WhatsApp Web)
     printQRInTerminal: false,
     logger: pinoLogger,
     browser: ['OLIMPO', 'Chrome', '120.0'],
     syncFullHistory: false,
     keepAliveIntervalMs: 15_000,
-    // Provide stored messages for retry handling
     getMessage: async (key) => {
       const stored = msgStore.get(key.id ?? '');
       return stored ?? { conversation: '' };
     },
   });
+
+  // ── Request pairing code if not registered ────
+  // This runs only when there is no existing session
+  const isRegistered = !!state.creds.registered;
+  if (!isRegistered && pairingPhone) {
+    // Give socket a moment to initialize before requesting code
+    setTimeout(async () => {
+      try {
+        const phone = pairingPhone!.replace(/[^0-9]/g, '');
+        logger.info(`[WA] Solicitando código de emparejamiento para +${phone}`);
+        const code = await sock!.requestPairingCode(phone);
+        pairingCode = code ?? null;
+        logger.info(`[WA] Código de emparejamiento generado: ${pairingCode}`);
+      } catch (err) {
+        logger.error('[WA] Error al solicitar código de emparejamiento', { err });
+        pairingCode = null;
+      }
+    }, 3000);
+  }
 
   // ── Creds update ─────────────────────────────
   sock.ev.on('creds.update', async () => {
@@ -177,17 +182,12 @@ export async function connectWhatsApp(
 
   // ── Connection events ─────────────────────────
   sock.ev.on('connection.update', async (update) => {
-    const { connection, lastDisconnect, qr } = update;
-
-    if (qr) {
-      currentQR   = qr;
-      isConnected = false;
-      logger.info('[WA] QR generado — escanea en /api/whatsapp/qr');
-    }
+    const { connection, lastDisconnect } = update;
 
     if (connection === 'open') {
-      currentQR   = null;
       isConnected = true;
+      pairingCode  = null; // Clear code once connected
+      pairingPhone = null;
       logger.info('[WA] ✅ Conectado exitosamente');
       await syncAuthToDB();
     }
@@ -206,6 +206,8 @@ export async function connectWhatsApp(
         logger.warn('[WA] Sesión cerrada — limpiando DB');
         await prisma.whatsAppSession.deleteMany({ where: { id: 'main' } });
         if (fs.existsSync(AUTH_DIR)) fs.rmSync(AUTH_DIR, { recursive: true });
+        pairingCode  = null;
+        pairingPhone = null;
       }
     }
   });
@@ -219,7 +221,6 @@ export async function connectWhatsApp(
       if (msg.key.fromMe) continue;
 
       const remoteJid = msg.key.remoteJid ?? '';
-
       if (remoteJid.endsWith('@g.us')) continue;
       if (remoteJid === 'status@broadcast') continue;
       if (!msg.message) continue;
@@ -233,14 +234,12 @@ export async function connectWhatsApp(
         }
       }
 
-      // Get stable session identifier
       const sessionPhone = jidToSessionPhone(remoteJid);
       if (!sessionPhone) {
         logger.warn(`[WA] JID no reconocido: ${remoteJid}`);
         continue;
       }
 
-      // Extract text content
       const body = (
         msg.message.conversation ??
         msg.message.extendedTextMessage?.text ??
@@ -248,24 +247,14 @@ export async function connectWhatsApp(
         ''
       ).trim();
 
-      if (!body) {
-        logger.info(`[WA] Mensaje sin texto ignorado (${remoteJid})`);
-        continue;
+      if (!body) continue;
+
+      if (remoteJid.includes('@lid')) {
+        lidJidMap.set(sessionPhone, remoteJid);
       }
 
       const pushName = msg.pushName ?? '';
       logger.info(`[WA] ✉️  De: ${sessionPhone} (${pushName}) | "${body.slice(0, 80)}"`);
-
-      // Store original JID so we can reply correctly (especially for @lid)
-      // We pass the original remoteJid as part of the phone key so the handler
-      // can use it when calling WhatsAppAdapter.send()
-      // Convention: for @lid users, sessionPhone = "lid_XXXX"
-      // The send() method receives this and looks up the original JID
-
-      // Store mapping lid → original jid for reply
-      if (remoteJid.includes('@lid')) {
-        lidJidMap.set(sessionPhone, remoteJid);
-      }
 
       if (onMessageCallback) {
         await onMessageCallback(sessionPhone, body).catch(err =>
@@ -276,12 +265,25 @@ export async function connectWhatsApp(
   });
 }
 
-// Map to store lid_XXX → original @lid JID for replies
-const lidJidMap = new Map<string, string>();
+// ─── Public methods ───────────────────────────
 
-// ─── Send message ─────────────────────────────
+/**
+ * Initiate pairing with a phone number.
+ * Call this before connectWhatsApp if no session exists.
+ */
+export async function requestPairing(phone: string): Promise<void> {
+  pairingPhone = phone.replace(/[^0-9]/g, '');
+  pairingCode  = null;
+
+  // Clear existing session so Baileys requests a new pairing
+  await prisma.whatsAppSession.deleteMany({ where: { id: 'main' } });
+  if (fs.existsSync(AUTH_DIR)) fs.rmSync(AUTH_DIR, { recursive: true });
+
+  logger.info(`[WA] Iniciando emparejamiento para +${pairingPhone}`);
+}
+
 export interface SendMessageOptions {
-  to: string;       // sessionPhone (phone number or "lid_XXX")
+  to: string;
   body: string;
   studentId?: string;
   type?: string;
@@ -294,11 +296,8 @@ export const WhatsAppAdapter = {
       return;
     }
 
-    // Resolve the correct JID to send to
     const originalLidJid = lidJidMap.get(opts.to);
     const jid = sessionPhoneToJid(opts.to, originalLidJid);
-
-    logger.info(`[WA] Enviando a ${opts.to} → jid=${jid}`);
 
     try {
       await sock.sendMessage(jid, { text: opts.body });
@@ -327,7 +326,11 @@ export const WhatsAppAdapter = {
     }
   },
 
-  getQR():       string | null  { return currentQR; },
-  isConnected(): boolean        { return isConnected; },
-  getSocket():   WASocket | null { return sock; },
+  isConnected():    boolean        { return isConnected; },
+  getPairingCode(): string | null  { return pairingCode; },
+  getPairingPhone(): string | null { return pairingPhone; },
+  getSocket():      WASocket | null { return sock; },
+
+  // Legacy QR — kept for backward compat, always null now
+  getQR():          string | null  { return null; },
 };

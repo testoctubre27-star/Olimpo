@@ -1,12 +1,26 @@
 import { Users, TrendingUp, AlertTriangle, UserX, DollarSign, Calendar, Wifi, WifiOff, QrCode } from 'lucide-react';
 import { BarChart, Bar, XAxis, YAxis, CartesianGrid, Tooltip, ResponsiveContainer, Cell } from 'recharts';
 import { useDashboard, useWhatsAppStatus } from '../../hooks/useApi';
+import { api } from '../../services/api';
 import { StatCard, Card, PageSpinner, SectionHeader } from '../../components/ui';
 import { formatCurrency, DAY_LABEL, occupancyColor, formatDate, formatCurrency as fc } from '../../utils/labels';
 
 export default function DashboardPage() {
   const { data, isLoading, error } = useDashboard();
   const { data: waStatus } = useWhatsAppStatus();
+  const [showPairModal, setShowPairModal] = React.useState(false);
+  const [pairPhone, setPairPhone] = React.useState('');
+  const [pairLoading, setPairLoading] = React.useState(false);
+
+  const handleStartPairing = async () => {
+    if (!pairPhone || pairPhone.replace(/\D/g,'').length < 10) return;
+    setPairLoading(true);
+    try {
+      await api.post('/whatsapp/pair', { phone: pairPhone.replace(/\D/g,'') });
+      setShowPairModal(false);
+      setPairPhone('');
+    } catch { /* ignore */ } finally { setPairLoading(false); }
+  };
 
   if (isLoading) return <PageSpinner />;
   if (error || !data) return (
@@ -69,38 +83,63 @@ export default function DashboardPage() {
 
       {/* ── WhatsApp status ── */}
       <div style={{ marginBottom: 20 }}>
-        <Card style={{ display: 'flex', alignItems: 'center', justifyContent: 'space-between', padding: '14px 20px' }}>
-          <div style={{ display: 'flex', alignItems: 'center', gap: 12 }}>
-            {waStatus?.connected
-              ? <Wifi size={18} color="var(--success)" />
-              : <WifiOff size={18} color="var(--danger)" />}
-            <div>
-              <p style={{ fontSize: 14, fontWeight: 600, color: 'var(--text-primary)' }}>
-                WhatsApp {waStatus?.connected ? 'conectado' : 'desconectado'}
-              </p>
-              <p style={{ fontSize: 12, color: 'var(--text-muted)', marginTop: 2 }}>
-                {waStatus?.connected
-                  ? 'El bot está activo y recibiendo mensajes'
-                  : waStatus?.hasQR
-                  ? 'QR listo para escanear'
-                  : 'Sin conexión — iniciando...'}
-              </p>
+        <Card style={{ padding: '14px 20px' }}>
+          <div style={{ display: 'flex', alignItems: 'center', justifyContent: 'space-between', flexWrap: 'wrap', gap: 12 }}>
+            <div style={{ display: 'flex', alignItems: 'center', gap: 12 }}>
+              {waStatus?.connected
+                ? <Wifi size={18} color="var(--success)" />
+                : <WifiOff size={18} color="var(--danger)" />}
+              <div>
+                <p style={{ fontSize: 14, fontWeight: 600, color: 'var(--text-primary)' }}>
+                  WhatsApp {waStatus?.connected ? 'conectado' : 'desconectado'}
+                </p>
+                <p style={{ fontSize: 12, color: 'var(--text-muted)', marginTop: 2 }}>
+                  {waStatus?.connected
+                    ? 'El bot está activo y recibiendo mensajes'
+                    : waStatus?.pairingCode
+                    ? `Código listo para +${waStatus.pairingPhone}`
+                    : waStatus?.pairingPhone
+                    ? 'Generando código de emparejamiento...'
+                    : 'Sin conexión — usa "Vincular" para conectar'}
+                </p>
+              </div>
             </div>
+            {!waStatus?.connected && (
+              <div style={{ display: 'flex', gap: 8 }}>
+                <Button size="sm" onClick={() => setShowPairModal(true)} icon={<QrCode size={14} />}>
+                  Vincular WhatsApp
+                </Button>
+                {waStatus?.pairingPhone && (
+                  <a
+                    href={`${import.meta.env.VITE_API_URL?.replace('/api', '') ?? 'http://localhost:4000'}/api/whatsapp/pair-status?token=${localStorage.getItem('olimpo_token') ?? ''}`}
+                    target="_blank" rel="noopener noreferrer"
+                    style={{ display: 'flex', alignItems: 'center', gap: 6, padding: '6px 14px',
+                      borderRadius: 'var(--radius-md)', border: '1px solid var(--border)',
+                      background: 'var(--surface)', color: 'var(--text-primary)',
+                      fontSize: 13, fontWeight: 500, textDecoration: 'none' }}>
+                    Ver código
+                  </a>
+                )}
+              </div>
+            )}
           </div>
-          {!waStatus?.connected && (
-            <a
-              href={`${import.meta.env.VITE_API_URL?.replace('/api', '') ?? 'http://localhost:4000'}/api/whatsapp/qr?token=${localStorage.getItem('olimpo_token') ?? ''}`}
-              target="_blank"
-              rel="noopener noreferrer"
-              style={{
-                display: 'flex', alignItems: 'center', gap: 6,
-                padding: '6px 14px', borderRadius: 'var(--radius-md)',
-                background: 'var(--primary)', color: 'white',
-                fontSize: 13, fontWeight: 500, textDecoration: 'none',
-              }}
-            >
-              <QrCode size={14} /> Escanear QR
-            </a>
+          {/* Pairing code display when available */}
+          {!waStatus?.connected && waStatus?.pairingCode && (
+            <div style={{ marginTop: 14, paddingTop: 14, borderTop: '1px solid var(--border)' }}>
+              <p style={{ fontSize: 12, color: 'var(--text-muted)', marginBottom: 10 }}>
+                Código de emparejamiento — ingrésalo en WhatsApp → Dispositivos vinculados → Vincular con número
+              </p>
+              <div style={{ display: 'flex', gap: 8 }}>
+                {(waStatus.pairingCode.match(/.{1,4}/g) ?? [waStatus.pairingCode]).map((part: string, i: number) => (
+                  <div key={i} style={{
+                    background: 'var(--primary)', color: 'white',
+                    fontSize: 22, fontWeight: 800, letterSpacing: 2,
+                    padding: '10px 16px', borderRadius: 10,
+                    fontFamily: 'monospace',
+                  }}>{part}</div>
+                ))}
+              </div>
+            </div>
           )}
         </Card>
       </div>
@@ -220,6 +259,32 @@ export default function DashboardPage() {
           ))}
         </div>
       </Card>
+    </div>
+
+      {/* Pairing modal */}
+      <Modal open={showPairModal} onClose={() => setShowPairModal(false)}
+        title="Vincular WhatsApp" size="sm"
+        footer={<>
+          <Button variant="secondary" onClick={() => setShowPairModal(false)}>Cancelar</Button>
+          <Button loading={pairLoading} onClick={handleStartPairing} icon={<QrCode size={14} />}>
+            Generar código
+          </Button>
+        </>}>
+        <div style={{ display: 'flex', flexDirection: 'column', gap: 14 }}>
+          <p style={{ fontSize: 14, color: 'var(--text-secondary)', lineHeight: 1.5 }}>
+            Ingresa el número de WhatsApp de la academia con código de país. Se generará un código de 8 dígitos para vincularlo como dispositivo secundario.
+          </p>
+          <Input
+            label="Número de WhatsApp (con código de país)"
+            placeholder="5212345678901"
+            value={pairPhone}
+            onChange={e => setPairPhone(e.target.value)}
+          />
+          <div style={{ padding: '10px 14px', background: 'var(--info-bg)', borderRadius: 'var(--radius-md)', fontSize: 13, color: 'var(--info)' }}>
+            Ejemplo: si el número es 782 123 4567 de México, ingresa <strong>5217821234567</strong>
+          </div>
+        </div>
+      </Modal>
     </div>
   );
 }
