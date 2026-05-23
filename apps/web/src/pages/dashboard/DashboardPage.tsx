@@ -1,21 +1,37 @@
-import React, { useState } from 'react';
+import { useState } from 'react';
 import { Users, TrendingUp, AlertTriangle, UserX, DollarSign, Calendar, Wifi, WifiOff, QrCode } from 'lucide-react';
 import { BarChart, Bar, XAxis, YAxis, CartesianGrid, Tooltip, ResponsiveContainer, Cell } from 'recharts';
 import { useDashboard, useWhatsAppStatus } from '../../hooks/useApi';
 import { api } from '../../services/api';
 import { StatCard, Card, PageSpinner, SectionHeader, Button, Input } from '../../components/ui';
 import { Modal } from '../../components/ui/Modal';
-import { formatCurrency, DAY_LABEL, occupancyColor, formatDate } from '../../utils/labels';
+import { formatCurrency, occupancyColor, formatDate } from '../../utils/labels';
 
-export interface WhatsAppStatus {
-  connected: boolean;
-  pairingCode: string | null;
+// ─── Types ────────────────────────────────────
+interface DashboardData {
+  activeStudents:      number;
+  delinquentStudents:  number;
+  suspendedStudents:   number;
+  monthRevenue:        number;
+  yearRevenue:         number;
+  activeSchedules:     number;
+  scheduleOccupancy:   { name: string; occupied: number; pct: number }[];
+  recentPayments:      { id: string; student: { name: string }; amount: number; type: string; createdAt: string }[];
+}
+
+interface WAStatus {
+  connected:    boolean;
+  pairingCode:  string | null;
   pairingPhone: string | null;
 }
 
 export default function DashboardPage() {
   const { data, isLoading, error } = useDashboard();
-  const { data: waStatus } = useWhatsAppStatus();
+  const { data: waRaw } = useWhatsAppStatus();
+
+  // Cast to typed interfaces
+  const stats  = (data ?? {}) as Partial<DashboardData>;
+  const waStatus = waRaw as WAStatus | undefined;
 
   const [showPairModal, setShowPairModal] = useState(false);
   const [pairPhone, setPairPhone]         = useState('');
@@ -41,15 +57,15 @@ export default function DashboardPage() {
     </div>
   );
 
-  const stats = data ?? {};
-  const schedules: { day: number; name: string; available: number; occupied: number; pct: number }[] =
-    stats.scheduleOccupancy ?? [];
+  const schedules = stats.scheduleOccupancy ?? [];
 
   return (
     <div className="animate-fadeIn">
       <SectionHeader
         title="Dashboard"
-        subtitle={new Date().toLocaleDateString('es-MX', { weekday: 'long', year: 'numeric', month: 'long', day: 'numeric' })}
+        subtitle={new Date().toLocaleDateString('es-MX', {
+          weekday: 'long', year: 'numeric', month: 'long', day: 'numeric',
+        })}
       />
 
       {/* ── WhatsApp status ── */}
@@ -98,14 +114,14 @@ export default function DashboardPage() {
             )}
           </div>
 
-          {/* Pairing code inline display */}
+          {/* Pairing code inline */}
           {!waStatus?.connected && waStatus?.pairingCode && (
             <div style={{ marginTop: 14, paddingTop: 14, borderTop: '1px solid var(--border)' }}>
               <p style={{ fontSize: 12, color: 'var(--text-muted)', marginBottom: 10 }}>
-                Código de emparejamiento — ingrésalo en WhatsApp → Dispositivos vinculados → Vincular con número
+                Ingresa este código en WhatsApp → Dispositivos vinculados → Vincular con número
               </p>
               <div style={{ display: 'flex', gap: 8, flexWrap: 'wrap' }}>
-                {(waStatus.pairingCode.match(/.{1,4}/g) ?? [waStatus.pairingCode]).map((part: string, i: number) => (
+                {(waStatus.pairingCode.match(/.{1,4}/g) ?? [waStatus.pairingCode]).map((part, i) => (
                   <div key={i} style={{
                     background: 'var(--primary)', color: 'white',
                     fontSize: 22, fontWeight: 800, letterSpacing: 2,
@@ -122,18 +138,17 @@ export default function DashboardPage() {
 
       {/* ── Stat cards ── */}
       <div style={{ display: 'grid', gridTemplateColumns: 'repeat(auto-fill, minmax(220px, 1fr))', gap: 14, marginBottom: 24 }}>
-        <StatCard label="Alumnos activos"   value={stats.activeStudents   ?? 0} icon={<Users      size={20} color="var(--primary)" />} color="var(--primary-light)" />
-        <StatCard label="Ingresos del mes"  value={formatCurrency(stats.monthRevenue  ?? 0)} icon={<TrendingUp  size={20} color="var(--success)" />} color="var(--success-bg)" />
-        <StatCard label="Alumnos morosos"   value={stats.delinquentStudents ?? 0} icon={<AlertTriangle size={20} color="var(--warning)" />} color="var(--warning-bg)" />
-        <StatCard label="Suspendidos"       value={stats.suspendedStudents  ?? 0} icon={<UserX      size={20} color="var(--danger)"  />} color="var(--danger-bg)" />
-        <StatCard label="Ingresos del año"  value={formatCurrency(stats.yearRevenue   ?? 0)} icon={<DollarSign  size={20} color="var(--info)"    />} color="var(--info-bg)" />
-        <StatCard label="Horarios activos"  value={stats.activeSchedules    ?? 0} icon={<Calendar   size={20} color="var(--primary)" />} color="var(--primary-light)" />
+        <StatCard label="Alumnos activos"  value={stats.activeStudents      ?? 0} icon={<Users        size={20} color="var(--primary)" />} color="var(--primary-light)" />
+        <StatCard label="Ingresos del mes" value={formatCurrency(stats.monthRevenue    ?? 0)} icon={<TrendingUp   size={20} color="var(--success)" />} color="var(--success-bg)" />
+        <StatCard label="Alumnos morosos"  value={stats.delinquentStudents   ?? 0} icon={<AlertTriangle size={20} color="var(--warning)" />} color="var(--warning-bg)" />
+        <StatCard label="Suspendidos"      value={stats.suspendedStudents    ?? 0} icon={<UserX        size={20} color="var(--danger)"  />} color="var(--danger-bg)" />
+        <StatCard label="Ingresos del año" value={formatCurrency(stats.yearRevenue     ?? 0)} icon={<DollarSign   size={20} color="var(--info)"    />} color="var(--info-bg)" />
+        <StatCard label="Horarios activos" value={stats.activeSchedules      ?? 0} icon={<Calendar     size={20} color="var(--primary)" />} color="var(--primary-light)" />
       </div>
 
       {/* ── Main grid ── */}
       <div style={{ display: 'grid', gridTemplateColumns: 'repeat(auto-fill, minmax(340px, 1fr))', gap: 20 }}>
 
-        {/* Occupancy chart */}
         {schedules.length > 0 && (
           <Card style={{ gridColumn: 'span 2' }}>
             <p style={{ fontSize: 14, fontWeight: 600, marginBottom: 16, color: 'var(--text-primary)' }}>
@@ -148,7 +163,7 @@ export default function DashboardPage() {
                   contentStyle={{ background: 'var(--surface)', border: '1px solid var(--border)', borderRadius: 8, fontSize: 13 }}
                   formatter={(v: number) => [`${v} alumnos`]}
                 />
-                <Bar dataKey="occupied" radius={[4,4,0,0]}>
+                <Bar dataKey="occupied" radius={[4, 4, 0, 0]}>
                   {schedules.map((s, i) => (
                     <Cell key={i} fill={occupancyColor(s.pct)} />
                   ))}
@@ -158,14 +173,13 @@ export default function DashboardPage() {
           </Card>
         )}
 
-        {/* Recent payments */}
-        {stats.recentPayments?.length > 0 && (
+        {(stats.recentPayments?.length ?? 0) > 0 && (
           <Card>
             <p style={{ fontSize: 14, fontWeight: 600, marginBottom: 14, color: 'var(--text-primary)' }}>
               Pagos recientes
             </p>
             <div style={{ display: 'flex', flexDirection: 'column', gap: 10 }}>
-              {stats.recentPayments.slice(0, 6).map((pay: { id: string; student: { name: string }; amount: number; type: string; createdAt: string }) => (
+              {stats.recentPayments!.slice(0, 6).map(pay => (
                 <div key={pay.id} style={{ display: 'flex', alignItems: 'center', justifyContent: 'space-between', gap: 12 }}>
                   <div>
                     <p style={{ fontSize: 13, fontWeight: 500, color: 'var(--text-primary)' }}>{pay.student?.name}</p>
