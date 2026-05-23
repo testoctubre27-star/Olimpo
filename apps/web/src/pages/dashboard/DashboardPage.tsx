@@ -5,18 +5,33 @@ import { useDashboard, useWhatsAppStatus } from '../../hooks/useApi';
 import { api } from '../../services/api';
 import { StatCard, Card, PageSpinner, SectionHeader, Button, Input } from '../../components/ui';
 import { Modal } from '../../components/ui/Modal';
-import { formatCurrency, occupancyColor, formatDate } from '../../utils/labels';
+import { formatCurrency, DAY_LABEL, occupancyColor, formatDate, formatCurrency as fc } from '../../utils/labels';
 
 // ─── Types ────────────────────────────────────
+interface Schedule {
+  id: string;
+  dayOfWeek: number;
+  startTime: string;
+  modality: string;
+  occupied: number;
+  capacity: number;
+  occupancyPct: number;
+  waitingCount: number;
+}
+
+interface RecentPayment {
+  id: string;
+  amount: number;
+  confirmedAt: string;
+  student?: { name: string };
+}
+
 interface DashboardData {
-  activeStudents:      number;
-  delinquentStudents:  number;
-  suspendedStudents:   number;
-  monthRevenue:        number;
-  yearRevenue:         number;
-  activeSchedules:     number;
-  scheduleOccupancy:   { name: string; occupied: number; pct: number }[];
-  recentPayments:      { id: string; student: { name: string }; amount: number; type: string; createdAt: string }[];
+  generatedAt: string;
+  students: { active: number; delinquent: number; suspended: number; total: number };
+  revenue:   { monthly: number; yearly: number };
+  schedules: Schedule[];
+  recentPayments: RecentPayment[];
 }
 
 interface WAStatus {
@@ -26,12 +41,11 @@ interface WAStatus {
 }
 
 export default function DashboardPage() {
-  const { data, isLoading, error } = useDashboard();
-  const { data: waRaw } = useWhatsAppStatus();
+  const { data: rawData, isLoading, error } = useDashboard();
+  const { data: rawWA } = useWhatsAppStatus();
 
-  // Cast to typed interfaces
-  const stats  = (data ?? {}) as Partial<DashboardData>;
-  const waStatus = waRaw as WAStatus | undefined;
+  const data     = rawData as DashboardData | undefined;
+  const waStatus = rawWA  as WAStatus  | undefined;
 
   const [showPairModal, setShowPairModal] = useState(false);
   const [pairPhone, setPairPhone]         = useState('');
@@ -45,30 +59,29 @@ export default function DashboardPage() {
       await api.post('/whatsapp/pair', { phone: digits });
       setShowPairModal(false);
       setPairPhone('');
-    } catch { /* ignore */ } finally {
-      setPairLoading(false);
-    }
+    } catch { /* ignore */ } finally { setPairLoading(false); }
   };
 
   if (isLoading) return <PageSpinner />;
-  if (error) return (
-    <div style={{ padding: 24, color: 'var(--danger)' }}>
-      Error al cargar el dashboard. Intenta recargar la página.
-    </div>
+  if (error || !data) return (
+    <div style={{ color: 'var(--danger)', fontSize: 14 }}>Error al cargar el dashboard. Intenta de nuevo.</div>
   );
 
-  const schedules = stats.scheduleOccupancy ?? [];
+  const scheduleChartData = data.schedules.map(s => ({
+    name: `${DAY_LABEL[s.dayOfWeek]} ${s.startTime}`,
+    ocupados:  s.occupied,
+    capacidad: s.capacity,
+    pct:       s.occupancyPct,
+  }));
 
   return (
     <div className="animate-fadeIn">
       <SectionHeader
         title="Dashboard"
-        subtitle={new Date().toLocaleDateString('es-MX', {
-          weekday: 'long', year: 'numeric', month: 'long', day: 'numeric',
-        })}
+        subtitle={`Actualizado ${formatDate(data.generatedAt)}`}
       />
 
-      {/* ── WhatsApp status ── */}
+      {/* ── WhatsApp status card ── */}
       <div style={{ marginBottom: 20 }}>
         <Card style={{ padding: '14px 20px' }}>
           <div style={{ display: 'flex', alignItems: 'center', justifyContent: 'space-between', flexWrap: 'wrap', gap: 12 }}>
@@ -91,22 +104,18 @@ export default function DashboardPage() {
                 </p>
               </div>
             </div>
-
             {!waStatus?.connected && (
               <div style={{ display: 'flex', gap: 8 }}>
                 <Button size="sm" onClick={() => setShowPairModal(true)} icon={<QrCode size={14} />}>
                   Vincular WhatsApp
                 </Button>
                 {waStatus?.pairingPhone && (
-                  <a
-                    href={`${import.meta.env.VITE_API_URL?.replace('/api', '') ?? 'http://localhost:4000'}/api/whatsapp/pair-status?token=${localStorage.getItem('olimpo_token') ?? ''}`}
+                  <a href={`${import.meta.env.VITE_API_URL?.replace('/api', '') ?? 'http://localhost:4000'}/api/whatsapp/pair-status?token=${localStorage.getItem('olimpo_token') ?? ''}`}
                     target="_blank" rel="noopener noreferrer"
-                    style={{
-                      display: 'flex', alignItems: 'center', gap: 6,
-                      padding: '6px 14px', borderRadius: 'var(--radius-md)',
-                      border: '1px solid var(--border)', background: 'var(--surface)',
-                      color: 'var(--text-primary)', fontSize: 13, fontWeight: 500, textDecoration: 'none',
-                    }}>
+                    style={{ display: 'flex', alignItems: 'center', gap: 6, padding: '6px 14px',
+                      borderRadius: 'var(--radius-md)', border: '1px solid var(--border)',
+                      background: 'var(--surface)', color: 'var(--text-primary)',
+                      fontSize: 13, fontWeight: 500, textDecoration: 'none' }}>
                     Ver código
                   </a>
                 )}
@@ -114,7 +123,7 @@ export default function DashboardPage() {
             )}
           </div>
 
-          {/* Pairing code inline */}
+          {/* Inline pairing code */}
           {!waStatus?.connected && waStatus?.pairingCode && (
             <div style={{ marginTop: 14, paddingTop: 14, borderTop: '1px solid var(--border)' }}>
               <p style={{ fontSize: 12, color: 'var(--text-muted)', marginBottom: 10 }}>
@@ -122,11 +131,9 @@ export default function DashboardPage() {
               </p>
               <div style={{ display: 'flex', gap: 8, flexWrap: 'wrap' }}>
                 {(waStatus.pairingCode.match(/.{1,4}/g) ?? [waStatus.pairingCode]).map((part, i) => (
-                  <div key={i} style={{
-                    background: 'var(--primary)', color: 'white',
+                  <div key={i} style={{ background: 'var(--primary)', color: 'white',
                     fontSize: 22, fontWeight: 800, letterSpacing: 2,
-                    padding: '10px 16px', borderRadius: 10, fontFamily: 'monospace',
-                  }}>
+                    padding: '10px 16px', borderRadius: 10, fontFamily: 'monospace' }}>
                     {part}
                   </div>
                 ))}
@@ -137,63 +144,121 @@ export default function DashboardPage() {
       </div>
 
       {/* ── Stat cards ── */}
-      <div style={{ display: 'grid', gridTemplateColumns: 'repeat(auto-fill, minmax(220px, 1fr))', gap: 14, marginBottom: 24 }}>
-        <StatCard label="Alumnos activos"  value={stats.activeStudents      ?? 0} icon={<Users        size={20} color="var(--primary)" />} color="var(--primary-light)" />
-        <StatCard label="Ingresos del mes" value={formatCurrency(stats.monthRevenue    ?? 0)} icon={<TrendingUp   size={20} color="var(--success)" />} color="var(--success-bg)" />
-        <StatCard label="Alumnos morosos"  value={stats.delinquentStudents   ?? 0} icon={<AlertTriangle size={20} color="var(--warning)" />} color="var(--warning-bg)" />
-        <StatCard label="Suspendidos"      value={stats.suspendedStudents    ?? 0} icon={<UserX        size={20} color="var(--danger)"  />} color="var(--danger-bg)" />
-        <StatCard label="Ingresos del año" value={formatCurrency(stats.yearRevenue     ?? 0)} icon={<DollarSign   size={20} color="var(--info)"    />} color="var(--info-bg)" />
-        <StatCard label="Horarios activos" value={stats.activeSchedules      ?? 0} icon={<Calendar     size={20} color="var(--primary)" />} color="var(--primary-light)" />
+      <div style={{ display: 'grid', gridTemplateColumns: 'repeat(auto-fit, minmax(200px, 1fr))', gap: 16, marginBottom: 28 }}>
+        <StatCard label="Alumnos activos"  value={data.students.active}               icon={<Users        size={20} color="var(--primary)" />} color="var(--primary-light)" />
+        <StatCard label="Ingresos del mes" value={formatCurrency(data.revenue.monthly)} icon={<DollarSign   size={20} color="var(--success)" />} color="var(--success-bg)" />
+        <StatCard label="Morosos"          value={data.students.delinquent}            icon={<AlertTriangle size={20} color="var(--warning)" />} color="var(--warning-bg)" />
+        <StatCard label="Suspendidos"      value={data.students.suspended}             icon={<UserX        size={20} color="var(--danger)"  />} color="var(--danger-bg)" />
+        <StatCard label="Total alumnos"    value={data.students.total}                 icon={<TrendingUp   size={20} color="var(--info)"    />} color="var(--info-bg)" />
+        <StatCard label="Ingresos del año" value={formatCurrency(data.revenue.yearly)}  icon={<DollarSign   size={20} color="var(--primary)" />} color="var(--primary-light)" />
       </div>
 
       {/* ── Main grid ── */}
-      <div style={{ display: 'grid', gridTemplateColumns: 'repeat(auto-fill, minmax(340px, 1fr))', gap: 20 }}>
+      <div style={{ display: 'grid', gridTemplateColumns: '1fr 360px', gap: 20 }}>
 
-        {schedules.length > 0 && (
-          <Card style={{ gridColumn: 'span 2' }}>
-            <p style={{ fontSize: 14, fontWeight: 600, marginBottom: 16, color: 'var(--text-primary)' }}>
-              Ocupación de horarios
+        {/* Occupancy chart */}
+        <Card>
+          <div style={{ display: 'flex', alignItems: 'center', gap: 8, marginBottom: 20 }}>
+            <Calendar size={16} color="var(--primary)" />
+            <h2 style={{ fontSize: 15, fontWeight: 600, color: 'var(--text-primary)' }}>Ocupación de horarios</h2>
+          </div>
+          {scheduleChartData.length === 0 ? (
+            <p style={{ color: 'var(--text-muted)', fontSize: 14, textAlign: 'center', padding: '24px 0' }}>
+              No hay horarios configurados
             </p>
+          ) : (
             <ResponsiveContainer width="100%" height={220}>
-              <BarChart data={schedules} margin={{ top: 0, right: 0, left: -20, bottom: 0 }}>
-                <CartesianGrid strokeDasharray="3 3" stroke="var(--border)" />
-                <XAxis dataKey="name" tick={{ fontSize: 12, fill: 'var(--text-muted)' }} />
-                <YAxis tick={{ fontSize: 12, fill: 'var(--text-muted)' }} />
+              <BarChart data={scheduleChartData} margin={{ left: -20 }}>
+                <CartesianGrid strokeDasharray="3 3" stroke="var(--border)" vertical={false} />
+                <XAxis dataKey="name" tick={{ fontSize: 11, fill: 'var(--text-muted)' }} axisLine={false} tickLine={false} />
+                <YAxis tick={{ fontSize: 11, fill: 'var(--text-muted)' }} axisLine={false} tickLine={false} />
                 <Tooltip
-                  contentStyle={{ background: 'var(--surface)', border: '1px solid var(--border)', borderRadius: 8, fontSize: 13 }}
-                  formatter={(v: number) => [`${v} alumnos`]}
+                  contentStyle={{ background: 'var(--surface)', border: '1px solid var(--border)', borderRadius: 8, fontSize: 12 }}
+                  formatter={(value: number, name: string) => [value, name === 'ocupados' ? 'Alumnos' : 'Capacidad']}
                 />
-                <Bar dataKey="occupied" radius={[4, 4, 0, 0]}>
-                  {schedules.map((s, i) => (
-                    <Cell key={i} fill={occupancyColor(s.pct)} />
+                <Bar dataKey="capacidad" fill="var(--border)" radius={[4,4,0,0]} maxBarSize={32} />
+                <Bar dataKey="ocupados"  radius={[4,4,0,0]} maxBarSize={32}>
+                  {scheduleChartData.map((entry, i) => (
+                    <Cell key={i} fill={occupancyColor(entry.pct)} />
                   ))}
                 </Bar>
               </BarChart>
             </ResponsiveContainer>
-          </Card>
-        )}
+          )}
+          {/* Legend */}
+          <div style={{ display: 'flex', gap: 16, marginTop: 12 }}>
+            {[
+              { color: 'var(--success)', label: 'Disponible (<70%)' },
+              { color: 'var(--warning)', label: 'Casi lleno (70-89%)' },
+              { color: 'var(--danger)',  label: 'Lleno (≥90%)' },
+            ].map(l => (
+              <div key={l.label} style={{ display: 'flex', alignItems: 'center', gap: 6 }}>
+                <div style={{ width: 10, height: 10, borderRadius: 3, background: l.color }} />
+                <span style={{ fontSize: 11, color: 'var(--text-muted)' }}>{l.label}</span>
+              </div>
+            ))}
+          </div>
+        </Card>
 
-        {(stats.recentPayments?.length ?? 0) > 0 && (
-          <Card>
-            <p style={{ fontSize: 14, fontWeight: 600, marginBottom: 14, color: 'var(--text-primary)' }}>
-              Pagos recientes
-            </p>
-            <div style={{ display: 'flex', flexDirection: 'column', gap: 10 }}>
-              {stats.recentPayments!.slice(0, 6).map(pay => (
-                <div key={pay.id} style={{ display: 'flex', alignItems: 'center', justifyContent: 'space-between', gap: 12 }}>
-                  <div>
-                    <p style={{ fontSize: 13, fontWeight: 500, color: 'var(--text-primary)' }}>{pay.student?.name}</p>
-                    <p style={{ fontSize: 12, color: 'var(--text-muted)' }}>{formatDate(pay.createdAt)}</p>
-                  </div>
-                  <p style={{ fontSize: 14, fontWeight: 700, color: 'var(--success)', flexShrink: 0 }}>
-                    {formatCurrency(pay.amount)}
+        {/* Recent payments */}
+        <Card style={{ display: 'flex', flexDirection: 'column' }}>
+          <div style={{ display: 'flex', alignItems: 'center', gap: 8, marginBottom: 18 }}>
+            <DollarSign size={16} color="var(--primary)" />
+            <h2 style={{ fontSize: 15, fontWeight: 600, color: 'var(--text-primary)' }}>Pagos recientes</h2>
+          </div>
+          <div style={{ display: 'flex', flexDirection: 'column', gap: 12, flex: 1 }}>
+            {data.recentPayments.length === 0 && (
+              <p style={{ color: 'var(--text-muted)', fontSize: 13 }}>Sin pagos este mes</p>
+            )}
+            {data.recentPayments.map(p => (
+              <div key={p.id} style={{ display: 'flex', alignItems: 'center', justifyContent: 'space-between', gap: 12 }}>
+                <div style={{ flex: 1, minWidth: 0 }}>
+                  <p style={{ fontSize: 13, fontWeight: 500, color: 'var(--text-primary)', overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap' }}>
+                    {p.student?.name ?? '—'}
+                  </p>
+                  <p style={{ fontSize: 11, color: 'var(--text-muted)', marginTop: 2 }}>
+                    {formatDate(p.confirmedAt)}
                   </p>
                 </div>
-              ))}
-            </div>
-          </Card>
-        )}
+                <span style={{ fontSize: 13, fontWeight: 600, color: 'var(--success)', flexShrink: 0 }}>
+                  {fc(p.amount)}
+                </span>
+              </div>
+            ))}
+          </div>
+        </Card>
       </div>
+
+      {/* ── Schedule detail grid ── */}
+      <Card style={{ marginTop: 20 }}>
+        <h2 style={{ fontSize: 15, fontWeight: 600, marginBottom: 16, color: 'var(--text-primary)' }}>
+          Detalle de horarios
+        </h2>
+        <div style={{ display: 'grid', gridTemplateColumns: 'repeat(auto-fill, minmax(240px, 1fr))', gap: 12 }}>
+          {data.schedules.map(s => (
+            <div key={s.id} style={{ padding: '12px 14px', border: '1px solid var(--border)', borderRadius: 'var(--radius-md)', background: 'var(--bg)' }}>
+              <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'flex-start', gap: 8, marginBottom: 8 }}>
+                <div>
+                  <p style={{ fontSize: 13, fontWeight: 600, color: 'var(--text-primary)' }}>
+                    {DAY_LABEL[s.dayOfWeek]} {s.startTime}
+                  </p>
+                  <p style={{ fontSize: 11, color: 'var(--text-muted)', marginTop: 2 }}>{s.modality}</p>
+                </div>
+                <span style={{ fontSize: 11, fontWeight: 700, color: occupancyColor(s.occupancyPct), flexShrink: 0 }}>
+                  {s.occupancyPct}%
+                </span>
+              </div>
+              <div style={{ height: 4, background: 'var(--border)', borderRadius: 99 }}>
+                <div style={{ height: '100%', width: `${s.occupancyPct}%`, background: occupancyColor(s.occupancyPct), borderRadius: 99, transition: 'width .3s' }} />
+              </div>
+              <p style={{ fontSize: 11, color: 'var(--text-muted)', marginTop: 6 }}>
+                {s.occupied} / {s.capacity} alumnos
+                {s.waitingCount > 0 && <span style={{ color: 'var(--warning)', marginLeft: 6 }}>· {s.waitingCount} en espera</span>}
+              </p>
+            </div>
+          ))}
+        </div>
+      </Card>
 
       {/* ── Pairing modal ── */}
       <Modal
@@ -203,9 +268,7 @@ export default function DashboardPage() {
         size="sm"
         footer={
           <>
-            <Button variant="secondary" onClick={() => { setShowPairModal(false); setPairPhone(''); }}>
-              Cancelar
-            </Button>
+            <Button variant="secondary" onClick={() => { setShowPairModal(false); setPairPhone(''); }}>Cancelar</Button>
             <Button loading={pairLoading} onClick={handleStartPairing} icon={<QrCode size={14} />}>
               Generar código
             </Button>
