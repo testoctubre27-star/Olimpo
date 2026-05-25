@@ -1,34 +1,56 @@
-import { ConversationState, Modality } from '@prisma/client';
+import { ConversationState } from '@prisma/client';
 import { prisma } from '../config/database';
 import { WhatsAppAdapter } from './whatsapp.adapter';
 import { templates } from './templates';
 import { logger } from '../config/logger';
 
-// Maps user text input → Modality enum
-const MODALITY_MAP: Record<string, Modality> = {
-  '1': 'BABY_PHASE1',
-  '2': 'BABY_PHASE2',
-  '3': 'BABY_PHASE3',
-  '4': 'GROUP_CHILD',
-  '5': 'GROUP_ADULT',
-  '6': 'FREE_ACCESS',
-  '7': 'AQUA_THERAPY',
-};
+// ─── Build dynamic modality map from DB ───────
+// Returns a map of "1" → modalityId/serviceId/courseId
+// keyed by the position number shown in the menu
+interface MenuItem {
+  type: 'modality' | 'service' | 'course';
+  id: string;
+  modalityEnum?: string; // only for type=modality
+  name: string;
+}
 
-// Fetches active summer courses for bot menu
-async function getActiveCourses() {
+async function buildMenuItems(): Promise<MenuItem[]> {
+  const items: MenuItem[] = [];
+
+  const modalities = await prisma.modalityConfig.findMany({
+    where: { isActive: true },
+    orderBy: { name: 'asc' },
+  });
+
+  for (const m of modalities) {
+    items.push({ type: 'modality', id: m.id, modalityEnum: m.modality, name: m.name });
+  }
+
+  const services = await prisma.service.findMany({
+    where: { isActive: true },
+    orderBy: { name: 'asc' },
+  });
+
+  for (const s of services) {
+    items.push({ type: 'service', id: s.id, name: s.name });
+  }
+
   const courses = await prisma.summerCourse.findMany({
     where: { status: 'ACTIVE' },
-    include: {
-      enrollments: { where: { status: 'CONFIRMED' } },
-      teachers: { include: { teacher: { include: { user: { select: { name: true } } } } } },
-    },
+    include: { enrollments: { where: { status: 'CONFIRMED' } } },
     orderBy: { startDate: 'asc' },
   });
 
-  return courses.filter(c => c.enrollments.length < c.maxCapacity);
+  for (const c of courses) {
+    if (c.enrollments.length < c.maxCapacity) {
+      items.push({ type: 'course', id: c.id, name: c.name });
+    }
+  }
+
+  return items;
 }
 
+// ─── Main handler ─────────────────────────────
 export async function handleIncomingMessage(phone: string, body: string): Promise<void> {
   const text = body.trim().toUpperCase();
 
@@ -39,119 +61,122 @@ export async function handleIncomingMessage(phone: string, body: string): Promis
     });
   }
 
-  logger.info('Bot incoming', { phone, state: session.state, text: body.slice(0, 50) });
+  logger.info('Bot incoming', { phone, state: session.state, text: text.slice(0, 60) });
 
   switch (session.state) {
 
+    // ─── NEW CONTACT ──────────────────────────
     case ConversationState.NEW_CONTACT: {
       await WhatsAppAdapter.send({ to: phone, body: templates.onboardingGreeting(), type: 'ONBOARDING_GREETING' });
-      await prisma.botSession.update({
-        where: { phone },
-        data: { state: ConversationState.AWAITING_NAME },
-      });
+      await prisma.botSession.update({ where: { phone }, data: { state: ConversationState.AWAITING_NAME } });
       break;
     }
 
+    // ─── AWAITING NAME ────────────────────────
     case ConversationState.AWAITING_NAME: {
       const name = body.trim();
       if (name.length < 2) {
-        await WhatsAppAdapter.send({ to: phone, body: '¿Puedes decirme tu nombre completo? 😊', type: 'RETRY' });
+        await WhatsAppAdapter.send({ to: phone, body: '¿Puedes decirme tu nombre completo?', type: 'RETRY' });
         break;
       }
+
+      // Build menu and save it in session so we can map numbers later
+      const menuItems = await buildMenuItems();
+      const menuMsg   = await templates.askModality();
+
       await prisma.botSession.update({
         where: { phone },
-        data: { state: ConversationState.AWAITING_MODALITY, data: { name } },
+        data: {
+          state: ConversationState.AWAITING_MODALITY,
+          data: { name, menuItems },
+        },
       });
-      await WhatsAppAdapter.send({ to: phone, body: await templates.askModality(), type: 'ASK_MODALITY' });
+      await WhatsAppAdapter.send({ to: phone, body: menuMsg, type: 'ASK_MODALITY' });
       break;
     }
 
+    // ─── AWAITING MODALITY ────────────────────
     case ConversationState.AWAITING_MODALITY: {
-      const sessionData = (session.data as Record<string, string>) ?? {};
-      const activeCourses = await getActiveCourses();
+      const sessionData  = (session.data as Record<string, unknown>) ?? {};
+      const menuItems    = (sessionData.menuItems as MenuItem[]) ?? [];
+      const choiceIdx    = parseInt(text) - 1;
+      const chosen       = menuItems[choiceIdx];
 
-      // Check if user selected a summer course
-      const courseIndex = parseInt(text) - 8; // Options 1-7 are modalities, 8+ are courses
-      if (activeCourses.length > 0 && courseIndex >= 0 && courseIndex < activeCourses.length) {
-        const course = activeCourses[courseIndex];
-
-        await prisma.botSession.update({
-          where: { phone },
-          data: {
-            state: 'AWAITING_REGULATION_ACCEPT' as ConversationState,
-            data: { ...sessionData, courseId: course.id, isSummerCourse: 'true' },
-          },
-        });
-
-        const dateOpts: Intl.DateTimeFormatOptions = { day: '2-digit', month: 'long', year: 'numeric' };
-        const teachers = course.teachers.map(t => t.teacher.user.name).join(', ');
-        const infoMsg =
-          `¡Excelente elección! 🏊\n\n` +
-          `*${course.name}*\n\n` +
-          `${course.description ? course.description + '\n\n' : ''}` +
-          `📅 Inicio: ${new Date(course.startDate).toLocaleDateString('es-MX', dateOpts)}\n` +
-          `📅 Fin: ${new Date(course.endDate).toLocaleDateString('es-MX', dateOpts)}\n` +
-          `⏰ Periodo: ${course.period}\n` +
-          `${course.schedule ? `🕐 Horario: ${course.schedule}\n` : ''}` +
-          `👨‍🏫 Instructor(es): ${teachers || 'Por asignar'}\n` +
-          `💰 Costo total: $${Number(course.price).toLocaleString('es-MX')} MXN\n` +
-          `📊 Lugares disponibles: ${course.maxCapacity - course.enrollments.length}\n\n` +
-          `Para continuar, por favor lee y acepta nuestro reglamento:`;
-
-        await WhatsAppAdapter.send({ to: phone, body: infoMsg, type: 'COURSE_INFO' });
-        await WhatsAppAdapter.send({ to: phone, body: templates.sendRegulation(), type: 'REGULATION' });
-        break;
-      }
-
-      // Regular modality selection
-      const modality = MODALITY_MAP[text];
-      if (!modality) {
+      if (!chosen) {
         await WhatsAppAdapter.send({ to: phone, body: templates.unknown(), type: 'RETRY' });
         break;
       }
 
-      await prisma.botSession.update({
-        where: { phone },
-        data: { state: ConversationState.AWAITING_SCHEDULE, data: { ...sessionData, modality } },
-      });
+      // ── Summer course selected ────────────
+      if (chosen.type === 'course') {
+        const course = await prisma.summerCourse.findUnique({ where: { id: chosen.id } });
+        if (!course) { await WhatsAppAdapter.send({ to: phone, body: templates.unknown(), type: 'RETRY' }); break; }
 
-      const schedules = await prisma.schedule.findMany({
-        where: { modality: { modality }, isActive: true },
-        include: { slots: { where: { isActive: true } }, modality: true },
-      });
-
-      const DAYS = ['Dom', 'Lun', 'Mar', 'Mié', 'Jue', 'Vie', 'Sáb'];
-      const available = schedules
-        .filter(s => s.slots.length < (s.capacity ?? s.modality.maxCapacity))
-        .map(s => ({ day: DAYS[s.dayOfWeek], time: s.startTime, id: s.id }));
-
-      if (available.length === 0) {
-        await WhatsAppAdapter.send({
-          to: phone,
-          body: `Lo sentimos, no hay horarios disponibles para esa modalidad en este momento.\n\nTe anotaremos en lista de espera y te avisaremos cuando se libere un lugar. 🏊`,
-          type: 'NO_AVAILABILITY',
+        await prisma.botSession.update({
+          where: { phone },
+          data: {
+            state: ConversationState.AWAITING_REGULATION_ACCEPT,
+            data: { ...sessionData, courseId: course.id, courseName: course.name, isCourse: true },
+          },
         });
+        await WhatsAppAdapter.send({ to: phone, body: templates.sendRegulation(), type: 'REGULATION' });
         break;
+      }
+
+      // ── Modality or service selected ──────
+      const modalityEnum = chosen.type === 'modality' ? chosen.modalityEnum : null;
+
+      // Fetch schedules only for enum-based modalities
+      let availableSchedules: { day: string; time: string; id: string }[] = [];
+      if (modalityEnum) {
+        const DAYS = ['Dom','Lun','Mar','Mié','Jue','Vie','Sáb'];
+        const schedules = await prisma.schedule.findMany({
+          where: { modality: { modality: modalityEnum as never }, isActive: true },
+          include: { slots: { where: { isActive: true } }, modality: true },
+        });
+        availableSchedules = schedules
+          .filter(s => s.slots.length < (s.capacity ?? s.modality.maxCapacity))
+          .map(s => ({ day: DAYS[s.dayOfWeek], time: s.startTime, id: s.id }));
       }
 
       await prisma.botSession.update({
         where: { phone },
-        data: { data: { ...sessionData, modality, availableSchedules: available } },
+        data: {
+          state: ConversationState.AWAITING_SCHEDULE,
+          data: {
+            ...sessionData,
+            selectedId:         chosen.id,
+            selectedType:       chosen.type,
+            modalityEnum:       modalityEnum ?? null,
+            availableSchedules,
+          },
+        },
       });
 
-      await WhatsAppAdapter.send({
-        to: phone,
-        body: templates.askSchedule(available),
-        type: 'ASK_SCHEDULE',
-      });
+      if (availableSchedules.length === 0) {
+        // No schedules — skip to regulation
+        await prisma.botSession.update({
+          where: { phone },
+          data: { state: ConversationState.AWAITING_REGULATION_ACCEPT },
+        });
+        await WhatsAppAdapter.send({
+          to: phone,
+          body: `Anotamos tu interés en *${chosen.name}*.\n\nAntes de continuar, por favor lee nuestro reglamento:`,
+          type: 'NO_SCHEDULE',
+        });
+        await WhatsAppAdapter.send({ to: phone, body: templates.sendRegulation(), type: 'REGULATION' });
+      } else {
+        await WhatsAppAdapter.send({ to: phone, body: templates.askSchedule(availableSchedules), type: 'ASK_SCHEDULE' });
+      }
       break;
     }
 
+    // ─── AWAITING SCHEDULE ────────────────────
     case ConversationState.AWAITING_SCHEDULE: {
-      const sessionData = (session.data as Record<string, unknown>) ?? {};
-      const availableSchedules = (sessionData.availableSchedules as Array<{ day: string; time: string; id: string }>) ?? [];
-      const idx = parseInt(text) - 1;
-      const chosen = availableSchedules[idx];
+      const sessionData      = (session.data as Record<string, unknown>) ?? {};
+      const availableSchedules = (sessionData.availableSchedules as { day: string; time: string; id: string }[]) ?? [];
+      const idx              = parseInt(text) - 1;
+      const chosen           = availableSchedules[idx];
 
       if (!chosen) {
         await WhatsAppAdapter.send({ to: phone, body: templates.unknown(), type: 'RETRY' });
@@ -160,106 +185,89 @@ export async function handleIncomingMessage(phone: string, body: string): Promis
 
       await prisma.botSession.update({
         where: { phone },
-        data: { state: ConversationState.AWAITING_REGULATION_ACCEPT, data: { ...sessionData, scheduleId: chosen.id } },
+        data: {
+          state: ConversationState.AWAITING_REGULATION_ACCEPT,
+          data: { ...sessionData, scheduleId: chosen.id },
+        },
       });
-
       await WhatsAppAdapter.send({ to: phone, body: templates.sendRegulation(), type: 'REGULATION' });
       break;
     }
 
+    // ─── AWAITING REGULATION ACCEPT ───────────
     case ConversationState.AWAITING_REGULATION_ACCEPT: {
       if (text !== 'ACEPTO') {
         await WhatsAppAdapter.send({
           to: phone,
-          body: 'Para continuar debes aceptar el reglamento respondiendo *ACEPTO*. 📋',
+          body: 'Para continuar debes aceptar el reglamento respondiendo *ACEPTO*.',
           type: 'RETRY',
         });
         break;
       }
 
-      const sessionData = (session.data as Record<string, string>) ?? {};
-      const isSummerCourse = sessionData.isSummerCourse === 'true';
+      const sessionData = (session.data as Record<string, string & { isCourse?: boolean }>) ?? {};
+      const name = (sessionData as Record<string, string>).name ?? 'Alumno';
 
       await prisma.regulationSignature.create({
         data: { studentPhone: phone, regulationVersion: '1.0' },
       });
 
-      if (isSummerCourse) {
-        // Create summer course enrollment
-        const course = await prisma.summerCourse.findUnique({ where: { id: sessionData.courseId } });
+      // Upsert student
+      await prisma.student.upsert({
+        where: { phone },
+        update: {
+          name,
+          conversationState: ConversationState.PENDING_PAYMENT_CONFIRMATION,
+          regulationAcceptedAt: new Date(),
+          regulationVersion: '1.0',
+          conversationData: sessionData as never,
+        },
+        create: {
+          phone,
+          name,
+          modality: ((sessionData as Record<string, string>).modalityEnum ?? 'FREE_ACCESS') as never,
+          conversationState: ConversationState.PENDING_PAYMENT_CONFIRMATION,
+          regulationAcceptedAt: new Date(),
+          regulationVersion: '1.0',
+          conversationData: sessionData as never,
+        },
+      });
 
-        if (course) {
-          await prisma.summerCourseEnrollment.upsert({
-            where: { courseId_studentPhone: { courseId: course.id, studentPhone: phone } },
-            update: { status: 'PENDING', studentName: sessionData.name },
-            create: {
-              courseId:     course.id,
-              studentPhone: phone,
-              studentName:  sessionData.name,
-              status:       'PENDING',
+      // If it was a summer course, register the enrollment
+      if ((sessionData as Record<string, unknown>).isCourse && (sessionData as Record<string, string>).courseId) {
+        const student = await prisma.student.findUnique({ where: { phone } });
+        if (student) {
+          await prisma.summerCourseEnrollment.create({
+            data: {
+              courseId:  (sessionData as Record<string, string>).courseId,
+              studentId: student.id,
+              status:    'PENDING',
             },
-          });
-
-          await prisma.botSession.update({
-            where: { phone },
-            data: { state: ConversationState.PENDING_PAYMENT_CONFIRMATION },
-          });
-
-          await WhatsAppAdapter.send({
-            to: phone,
-            body:
-              `¡Gracias, ${sessionData.name}! ✅ Tu interés en el *${course.name}* ha sido registrado.\n\n` +
-              `Un administrador revisará tu solicitud y te contactará para confirmar tu inscripción y el pago de $${Number(course.price).toLocaleString('es-MX')} MXN.\n\n` +
-              `¡Gracias por elegir *OLIMPO*! 🏊`,
-            type: 'COURSE_INTEREST',
-          });
+          }).catch(() => undefined); // ignore if already enrolled
         }
-      } else {
-        // Regular student enrollment
-        const modality = sessionData.modality as Modality;
-
-        await prisma.student.upsert({
-          where: { phone },
-          update: {
-            name: sessionData.name,
-            modality,
-            conversationState: ConversationState.PENDING_PAYMENT_CONFIRMATION,
-            regulationAcceptedAt: new Date(),
-            regulationVersion: '1.0',
-            conversationData: sessionData,
-          },
-          create: {
-            phone,
-            name: sessionData.name,
-            modality,
-            conversationState: ConversationState.PENDING_PAYMENT_CONFIRMATION,
-            regulationAcceptedAt: new Date(),
-            regulationVersion: '1.0',
-            conversationData: sessionData,
-          },
-        });
-
-        await prisma.botSession.update({
-          where: { phone },
-          data: { state: ConversationState.PENDING_PAYMENT_CONFIRMATION },
-        });
-
-        await WhatsAppAdapter.send({
-          to: phone,
-          body: templates.regulationConfirmed(sessionData.name),
-          type: 'REGULATION_CONFIRMED',
-        });
       }
+
+      await prisma.botSession.update({
+        where: { phone },
+        data: { state: ConversationState.PENDING_PAYMENT_CONFIRMATION },
+      });
+
+      await WhatsAppAdapter.send({
+        to: phone,
+        body: templates.regulationConfirmed(name),
+        type: 'REGULATION_CONFIRMED',
+      });
       break;
     }
 
+    // ─── ACTIVE / EXISTING STUDENTS ───────────
     case ConversationState.ACTIVE:
     case ConversationState.DELINQUENT:
     case ConversationState.SUSPENDED:
     case ConversationState.PENDING_PAYMENT_CONFIRMATION: {
       await WhatsAppAdapter.send({
         to: phone,
-        body: `Hola, recibimos tu mensaje. 👋\n\nUn administrador de *OLIMPO* te atenderá en breve.`,
+        body: 'Hola, recibimos tu mensaje 👋\n\nUn administrador de *OLIMPO* te atenderá en breve.',
         type: 'HANDOFF',
       });
       break;

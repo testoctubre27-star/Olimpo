@@ -1,5 +1,6 @@
-// All WhatsApp message templates — centralized for easy editing
+import { prisma } from '../config/database';
 
+// ─── Reglamento completo ──────────────────────
 export const REGLAMENTO_TEXT = `📋 *REGLAMENTO OLIMPO — 10 Reglas para una Experiencia Segura y Respetuosa*
 
 *1. PAGA A TIEMPO*
@@ -34,7 +35,13 @@ El cumplimiento de estas reglas ayuda a mantener un ambiente seguro, armónico y
 
 _¡Tu responsabilidad hace la diferencia! Gracias por ser parte de la familia Olimpo._ 🏊`;
 
+// ─── Number emojis ────────────────────────────
+const NUM_EMOJI = ['1️⃣','2️⃣','3️⃣','4️⃣','5️⃣','6️⃣','7️⃣','8️⃣','9️⃣','🔟',
+  '1️⃣1️⃣','1️⃣2️⃣','1️⃣3️⃣','1️⃣4️⃣','1️⃣5️⃣'];
+
+// ─── Templates ────────────────────────────────
 export const templates = {
+
   welcome(name: string, schedule: string, teacherName: string): string {
     return (
       `¡Bienvenido/a a *OLIMPO*, ${name}! 🏊\n\n` +
@@ -53,55 +60,73 @@ export const templates = {
     );
   },
 
+  // ── Dynamic modality menu — reads isActive from DB ──
   async askModality(): Promise<string> {
-    // Base modalities (always shown)
-    let msg =
-      `¡Perfecto! ¿Qué modalidad te interesa?\n\n` +
-      `1️⃣ *Natación Bebés Fase 1* — 4 a 12 meses · $1,100/mes\n` +
-      `     Motricidad gruesa · 30 min · 2 veces/semana · Maestra dedicada\n\n` +
-      `2️⃣ *Natación Bebés Fase 2* — 1 a 3 años · $1,100/mes\n` +
-      `     Marcha · 30 min · 2 veces/semana · Maestra dedicada\n\n` +
-      `3️⃣ *Natación Bebés Fase 3* — 3 a 5 años · $1,100/mes\n` +
-      `     Movimientos finos y gruesos · 30 min · 2 veces/semana · Maestra dedicada\n\n` +
-      `4️⃣ *Natación Grupal* — $800/mes\n` +
-      `     60 min · 2 veces/semana · Un maestro por grupo\n\n` +
-      `5️⃣ *Acceso Libre* — $1,000/mes\n` +
-      `     Lunes a viernes · No es clase dirigida\n\n` +
-      `6️⃣ *Terapia Acuática* — $1,200/mes o $350 por sesión\n` +
-      `     Rehabilitación y movilidad · Lesiones, adultos mayores o movilidad reducida\n\n` +
-      `7️⃣ *Natación Adultos Grupal* — $800/mes\n` +
-      `     60 min · 2 veces/semana`;
+    // Fetch only ACTIVE modality configs from DB
+    const modalities = await prisma.modalityConfig.findMany({
+      where: { isActive: true },
+      orderBy: { name: 'asc' },
+    });
 
-    // Dynamically append active summer courses
-    try {
-      const { prisma } = await import('../config/database');
-      const courses = await prisma.summerCourse.findMany({
-        where: { status: 'ACTIVE' },
-        include: { enrollments: { where: { status: 'CONFIRMED' } } },
-        orderBy: { startDate: 'asc' },
-      });
+    // Fetch active custom services too
+    const services = await prisma.service.findMany({
+      where: { isActive: true },
+      orderBy: { name: 'asc' },
+    });
 
-      const available = courses.filter(c => c.enrollments.length < c.maxCapacity);
-      if (available.length > 0) {
-        msg += `\n\n🌊 *CURSOS DE VERANO DISPONIBLES:*\n`;
-        available.forEach((c, i) => {
-          const dateOpts: Intl.DateTimeFormatOptions = { day: '2-digit', month: 'short' };
-          const start = new Date(c.startDate).toLocaleDateString('es-MX', dateOpts);
-          const end   = new Date(c.endDate).toLocaleDateString('es-MX', dateOpts);
-          msg += `\n${i + 8}️⃣ *${c.name}* — $${Number(c.price).toLocaleString('es-MX')} total\n`;
-          msg += `     ${start} al ${end} · ${c.period}\n`;
-          msg += `     Lugares: ${c.maxCapacity - c.enrollments.length} disponibles`;
-        });
+    if (modalities.length === 0 && services.length === 0) {
+      return (
+        `Lo sentimos, no hay modalidades disponibles en este momento.\n\n` +
+        `Por favor contáctanos directamente para más información.`
+      );
+    }
+
+    let msg = `¡Perfecto! ¿Qué modalidad te interesa?\n\n`;
+    let idx = 0;
+
+    for (const m of modalities) {
+      const price = `$${Number(m.monthlyFee).toLocaleString('es-MX')}/mes`;
+      const desc  = m.description ? `\n     ${m.description}` : '';
+      msg += `${NUM_EMOJI[idx]} *${m.name}* — ${price}${desc}\n\n`;
+      idx++;
+    }
+
+    for (const s of services) {
+      const price = `$${Number(s.monthlyFee).toLocaleString('es-MX')}/mes`;
+      const desc  = s.description ? `\n     ${s.description}` : '';
+      msg += `${NUM_EMOJI[idx]} *${s.name}* — ${price}${desc}\n\n`;
+      idx++;
+    }
+
+    // Append active summer courses
+    const courses = await prisma.summerCourse.findMany({
+      where: { status: 'ACTIVE' },
+      include: { enrollments: { where: { status: 'CONFIRMED' } } },
+      orderBy: { startDate: 'asc' },
+    });
+
+    const availableCourses = courses.filter(c => c.enrollments.length < c.maxCapacity);
+    if (availableCourses.length > 0) {
+      msg += `🌊 *CURSOS DE VERANO DISPONIBLES:*\n\n`;
+      for (const c of availableCourses) {
+        const dateOpts: Intl.DateTimeFormatOptions = { day: '2-digit', month: 'short' };
+        const start = new Date(c.startDate).toLocaleDateString('es-MX', dateOpts);
+        const end   = new Date(c.endDate).toLocaleDateString('es-MX', dateOpts);
+        const price = `$${Number(c.price).toLocaleString('es-MX')} total`;
+        msg += `${NUM_EMOJI[idx]} *${c.name}* — ${price}\n`;
+        msg += `     ${start} al ${end} · ${c.period}\n`;
+        msg += `     Lugares: ${c.maxCapacity - c.enrollments.length} disponibles\n\n`;
+        idx++;
       }
-    } catch { /* If DB fails, show without courses */ }
+    }
 
-    msg += `\n\nResponde con el *número* de tu elección.`;
+    msg += `Responde con el *número* de tu elección.`;
     return msg;
   },
 
   askSchedule(available: { day: string; time: string }[]): string {
     const list = available
-      .map((s, i) => `${i + 1}️⃣ ${s.day} ${s.time}`)
+      .map((s, i) => `${NUM_EMOJI[i]} ${s.day} ${s.time}`)
       .join('\n');
     return (
       `Excelente. Estos son los horarios disponibles:\n\n` +
@@ -135,7 +160,6 @@ export const templates = {
       `${isUrgent ? '⚠️ *AVISO IMPORTANTE*' : '📅 Recordatorio de pago'}\n\n` +
       `Hola *${name}*, te recordamos que tu mensualidad de este mes aún no ha sido registrada.\n\n` +
       `Tienes hasta el *día 5 del mes* para realizar tu pago y conservar tu lugar.\n\n` +
-      `Puedes pagar vía transferencia o terminal en el centro.\n\n` +
       `Si ya realizaste tu pago, comunícate con administración para confirmarlo. 🏊`
     );
   },
@@ -145,7 +169,7 @@ export const templates = {
       `Hola *${name}*.\n\n` +
       `Lamentamos informarte que tu lugar ha sido *liberado* por falta de pago al corte del día 5.\n\n` +
       `Si deseas recuperar tu espacio, contáctanos para verificar disponibilidad.\n\n` +
-      `Quedamos a tus órdenes en *OLIMPO Centro de Terapia y Deporte*. 🏊`
+      `Quedamos a tus órdenes en *OLIMPO*. 🏊`
     );
   },
 
@@ -154,7 +178,7 @@ export const templates = {
       `¡Buenas noticias, *${name}*! 🎉\n\n` +
       `Se ha liberado un lugar en el horario: *${schedule}*\n\n` +
       `Tienes *24 horas* para confirmar tu interés respondiendo *CONFIRMO*.\n\n` +
-      `Si no confirmamos a tiempo, ofreceremos el lugar al siguiente en lista. ¡No pierdas tu oportunidad!`
+      `¡No pierdas tu oportunidad!`
     );
   },
 
