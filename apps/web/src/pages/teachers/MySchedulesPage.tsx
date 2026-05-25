@@ -81,7 +81,7 @@ const MODALITY_OPTIONS = [
 
 const DAY_OPTIONS = DAY_LABEL.map((d, i) => ({ value: String(i), label: d }));
 
-const TIME_OPTIONS = Array.from({ length: 28 }, (_, i) => {
+const TIME_OPTIONS = Array.from({ length: 36 }, (_, i) => {
   const hour = Math.floor(i / 2) + 6;
   const min  = i % 2 === 0 ? '00' : '30';
   const label = `${String(hour).padStart(2, '0')}:${min}`;
