@@ -4,6 +4,7 @@ import bcrypt from 'bcryptjs';
 import { authenticate, requireAdmin, requireTeacher } from '../middleware/auth';
 import { prisma } from '../config/database';
 import { respond } from '../utils/response';
+import { audit } from '../middleware/audit';
 
 const router = Router();
 router.use(authenticate);
@@ -12,19 +13,18 @@ async function getTeacherFromUser(userId: string) {
   return prisma.teacher.findUnique({ where: { userId } });
 }
 
-// ─────────────────────────────────────────────────────
+// ─────────────────────────────────────────────
 // ADMIN — gestión de maestros
-// ─────────────────────────────────────────────────────
+// ─────────────────────────────────────────────
 
 const createTeacherSchema = z.object({
-  name:          z.string().min(2, 'El nombre es requerido'),
-  email:         z.string().email('Email inválido'),
-  password:      z.string().min(6, 'Mínimo 6 caracteres'),
-  phone:         z.string().min(10, 'Teléfono requerido'),
+  name:          z.string().min(2),
+  email:         z.string().email(),
+  password:      z.string().min(6),
+  phone:         z.string().min(10),
   commissionPct: z.number().min(0).max(100).default(40),
 });
 
-// GET /teachers
 router.get('/', requireAdmin, async (_req: Request, res: Response, next: NextFunction): Promise<void> => {
   try {
     const teachers = await prisma.teacher.findMany({
@@ -33,10 +33,7 @@ router.get('/', requireAdmin, async (_req: Request, res: Response, next: NextFun
         students: { select: { id: true } },
         schedules: {
           where: { isActive: true },
-          include: {
-            modality: true,
-            slots: { where: { isActive: true } },
-          },
+          include: { modality: true, slots: { where: { isActive: true } } },
         },
       },
       orderBy: { user: { name: 'asc' } },
@@ -45,65 +42,38 @@ router.get('/', requireAdmin, async (_req: Request, res: Response, next: NextFun
   } catch (err) { next(err); }
 });
 
-// POST /teachers — create teacher + user account
 router.post('/', requireAdmin, async (req: Request, res: Response, next: NextFunction): Promise<void> => {
   try {
     const body = createTeacherSchema.parse(req.body);
-
-    // Check email not taken
     const existing = await prisma.user.findUnique({ where: { email: body.email } });
     if (existing) {
       respond.error(res, { message: 'Ya existe un usuario con ese email', code: 'DUPLICATE' }, 409);
       return;
     }
-
     const hashed = await bcrypt.hash(body.password, 12);
-
     const user = await prisma.user.create({
-      data: {
-        name:     body.name,
-        email:    body.email,
-        password: hashed,
-        role:     'TEACHER',
-        phone:    body.phone,
-      },
+      data: { name: body.name, email: body.email, password: hashed, role: 'TEACHER', phone: body.phone },
     });
-
     const teacher = await prisma.teacher.create({
-      data: {
-        userId:        user.id,
-        displayName:   body.name,
-        phone:         body.phone,
-        commissionPct: body.commissionPct,
-      },
-      include: {
-        user: { select: { name: true, email: true, isActive: true } },
-        students: { select: { id: true } },
-        schedules: true,
-      },
+      data: { userId: user.id, displayName: body.name, phone: body.phone, commissionPct: body.commissionPct },
+      include: { user: { select: { name: true, email: true, isActive: true } }, students: { select: { id: true } }, schedules: true },
     });
-
     respond.created(res, { data: teacher, message: 'Maestro creado correctamente' });
   } catch (err) { next(err); }
 });
 
-// PATCH /teachers/:id — update teacher info
 router.patch('/:id', requireAdmin, async (req: Request, res: Response, next: NextFunction): Promise<void> => {
   try {
     const body = z.object({
-      name:          z.string().min(2).optional(),
-      phone:         z.string().min(10).optional(),
+      name: z.string().min(2).optional(),
+      phone: z.string().min(10).optional(),
       commissionPct: z.number().min(0).max(100).optional(),
-      isActive:      z.boolean().optional(),
+      isActive: z.boolean().optional(),
     }).parse(req.body);
 
-    const teacher = await prisma.teacher.findUnique({
-      where: { id: req.params.id },
-      include: { user: true },
-    });
+    const teacher = await prisma.teacher.findUnique({ where: { id: req.params.id }, include: { user: true } });
     if (!teacher) { respond.error(res, { message: 'Maestro no encontrado' }, 404); return; }
 
-    // Update teacher record
     await prisma.teacher.update({
       where: { id: req.params.id },
       data: {
@@ -112,8 +82,6 @@ router.patch('/:id', requireAdmin, async (req: Request, res: Response, next: Nex
         ...(body.commissionPct !== undefined && { commissionPct: body.commissionPct }),
       },
     });
-
-    // Update user record
     await prisma.user.update({
       where: { id: teacher.userId },
       data: {
@@ -125,20 +93,15 @@ router.patch('/:id', requireAdmin, async (req: Request, res: Response, next: Nex
 
     const updated = await prisma.teacher.findUnique({
       where: { id: req.params.id },
-      include: {
-        user: { select: { name: true, email: true, isActive: true } },
-        students: { select: { id: true } },
-        schedules: { where: { isActive: true } },
-      },
+      include: { user: { select: { name: true, email: true, isActive: true } }, students: { select: { id: true } }, schedules: { where: { isActive: true } } },
     });
-
     respond.ok(res, { data: updated, message: 'Maestro actualizado' });
   } catch (err) { next(err); }
 });
 
-// ─────────────────────────────────────────────────────
+// ─────────────────────────────────────────────
 // TEACHER — sus propios datos
-// ─────────────────────────────────────────────────────
+// ─────────────────────────────────────────────
 
 router.get('/my-students', requireTeacher, async (req: Request, res: Response, next: NextFunction): Promise<void> => {
   try {
@@ -156,19 +119,17 @@ const scheduleSchema = z.object({
   dayOfWeek: z.number().int().min(0).max(6),
   startTime: z.string().regex(/^\d{2}:\d{2}$/),
   endTime:   z.string().regex(/^\d{2}:\d{2}$/),
-  modality:  z.enum([
-    'BABY_PHASE1', 'BABY_PHASE2', 'BABY_PHASE3',
-    'GROUP_CHILD', 'GROUP_ADULT', 'FREE_ACCESS', 'AQUA_THERAPY', 'PERSONAL_CHILD',
-  ]),
+  modality:  z.enum(['BABY_PHASE1','BABY_PHASE2','BABY_PHASE3','GROUP_CHILD','GROUP_ADULT','FREE_ACCESS','AQUA_THERAPY','PERSONAL_CHILD']),
   capacity:  z.number().int().min(1).max(50),
 });
 
+// GET my-schedules — only ACTIVE schedules
 router.get('/my-schedules', requireTeacher, async (req: Request, res: Response, next: NextFunction): Promise<void> => {
   try {
     const teacher = await getTeacherFromUser(req.user!.sub);
     if (!teacher) { respond.ok(res, { data: [] }); return; }
     const schedules = await prisma.schedule.findMany({
-      where: { teacherId: teacher.id },
+      where: { teacherId: teacher.id, isActive: true }, // ← only active
       include: {
         modality: true,
         slots: { where: { isActive: true }, include: { student: { select: { id: true, name: true, status: true } } } },
@@ -185,7 +146,6 @@ router.post('/my-schedules', requireTeacher, async (req: Request, res: Response,
     if (!teacher) { respond.error(res, { message: 'Perfil de maestro no encontrado' }, 404); return; }
 
     const body = scheduleSchema.parse(req.body);
-
     const modalityConfig = await prisma.modalityConfig.findUnique({ where: { modality: body.modality as never } });
     if (!modalityConfig) { respond.error(res, { message: 'Modalidad no encontrada' }, 404); return; }
 
@@ -196,9 +156,7 @@ router.post('/my-schedules', requireTeacher, async (req: Request, res: Response,
 
     const conflict = await prisma.schedule.findFirst({
       where: {
-        teacherId: teacher.id,
-        dayOfWeek: body.dayOfWeek,
-        isActive: true,
+        teacherId: teacher.id, dayOfWeek: body.dayOfWeek, isActive: true,
         OR: [
           { startTime: { lte: body.startTime }, endTime: { gt: body.startTime } },
           { startTime: { lt: body.endTime },    endTime: { gte: body.endTime } },
@@ -215,7 +173,6 @@ router.post('/my-schedules', requireTeacher, async (req: Request, res: Response,
       data: { teacherId: teacher.id, modalityId: modalityConfig.id, dayOfWeek: body.dayOfWeek, startTime: body.startTime, endTime: body.endTime, capacity: body.capacity },
       include: { modality: true, slots: true },
     });
-
     respond.created(res, { data: schedule, message: 'Horario creado correctamente' });
   } catch (err) { next(err); }
 });
@@ -226,7 +183,7 @@ router.patch('/my-schedules/:id', requireTeacher, async (req: Request, res: Resp
     if (!teacher) { respond.error(res, { message: 'No autorizado' }, 403); return; }
 
     const schedule = await prisma.schedule.findFirst({
-      where: { id: req.params.id, teacherId: teacher.id },
+      where: { id: req.params.id, teacherId: teacher.id, isActive: true },
       include: { slots: { where: { isActive: true } }, modality: true },
     });
     if (!schedule) { respond.error(res, { message: 'Horario no encontrado' }, 404); return; }
@@ -234,10 +191,6 @@ router.patch('/my-schedules/:id', requireTeacher, async (req: Request, res: Resp
     const { capacity } = z.object({ capacity: z.number().int().min(1).max(50) }).parse(req.body);
     if (capacity < schedule.slots.length) {
       respond.error(res, { message: `No puedes reducir el cupo. Ya tienes ${schedule.slots.length} alumno(s).`, code: 'CAPACITY_BELOW_ENROLLED' }, 422);
-      return;
-    }
-    if (capacity > schedule.modality.maxCapacity) {
-      respond.error(res, { message: `El cupo máximo para esta modalidad es ${schedule.modality.maxCapacity}`, code: 'CAPACITY_EXCEEDED' }, 422);
       return;
     }
 
@@ -250,6 +203,7 @@ router.patch('/my-schedules/:id', requireTeacher, async (req: Request, res: Resp
   } catch (err) { next(err); }
 });
 
+// DELETE my-schedules/:id — hard delete if no students, refuse otherwise
 router.delete('/my-schedules/:id', requireTeacher, async (req: Request, res: Response, next: NextFunction): Promise<void> => {
   try {
     const teacher = await getTeacherFromUser(req.user!.sub);
@@ -262,11 +216,16 @@ router.delete('/my-schedules/:id', requireTeacher, async (req: Request, res: Res
     if (!schedule) { respond.error(res, { message: 'Horario no encontrado' }, 404); return; }
 
     if (schedule.slots.length > 0) {
-      respond.error(res, { message: `No puedes eliminar este horario. Tiene ${schedule.slots.length} alumno(s) activo(s).`, code: 'SCHEDULE_HAS_STUDENTS' }, 409);
+      respond.error(res, {
+        message: `No puedes eliminar este horario — tiene ${schedule.slots.length} alumno(s) activo(s).`,
+        code: 'SCHEDULE_HAS_STUDENTS',
+      }, 409);
       return;
     }
 
-    await prisma.schedule.update({ where: { id: req.params.id }, data: { isActive: false } });
+    // Hard delete — remove from DB entirely so it never shows up again
+    await prisma.schedule.delete({ where: { id: req.params.id } });
+
     respond.noContent(res);
   } catch (err) { next(err); }
 });
