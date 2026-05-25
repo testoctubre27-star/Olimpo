@@ -124,33 +124,34 @@ export async function connectWhatsApp(
     browser: ['OLIMPO', 'Chrome', '120.0'],
     syncFullHistory: false,
     keepAliveIntervalMs: 15_000,
-    getMessage: async (key) => {
+    getMessage: async (key: { id?: string | null }) => {
       const stored = msgStore.get(key.id ?? '');
       return stored ?? { conversation: '' };
     },
   });
 
-  // ── Request pairing code immediately (no delay) ──
-  // The 408 timeout was caused by the 3s delay — by the time we requested
-  // the code, WA server had already closed the connection.
-  // Now we request it right after the socket is ready but BEFORE
-  // connection.update fires, using the 'open' event.
+  // ── Request pairing code immediately ──────────
+  // Must request BEFORE the connection.update 'open' event fires
+  // to avoid 408 timeout. We use a flag to request only once.
+  let pairingRequested = false;
   if (!isRegistered && pairingPhone) {
-    const phoneForPairing = pairingPhone; // capture in closure
-    sock.ev.once('connection.update', async (update) => {
-      // Request code as soon as socket connects, don't wait
-      if (update.connection === 'connecting' || update.qr) {
+    const phoneForPairing = pairingPhone;
+    // Request code as soon as the socket initializes
+    // Use a short timeout to let the WebSocket handshake start
+    setTimeout(async () => {
+      if (!pairingRequested && sock && phoneForPairing) {
+        pairingRequested = true;
         try {
           logger.info(`[WA] Solicitando código de emparejamiento para +${phoneForPairing}`);
-          const code = await sock!.requestPairingCode(phoneForPairing);
+          const code = await sock.requestPairingCode(phoneForPairing);
           pairingCode = code ?? null;
-          logger.info(`[WA] Código de emparejamiento generado: ${pairingCode}`);
+          logger.info(`[WA] Código de emparejamiento: ${pairingCode}`);
         } catch (err) {
           logger.error('[WA] Error al solicitar código', { err });
           pairingCode = null;
         }
       }
-    });
+    }, 1500);
   }
 
   // ── Creds update ─────────────────────────────

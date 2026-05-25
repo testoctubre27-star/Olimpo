@@ -10,12 +10,12 @@
     "prisma:migrate": "prisma migrate dev",
     "prisma:push": "prisma db push",
     "prisma:studio": "prisma studio",
-    "seed:modalities": "tsx src/scripts/seed-modalities.ts",
+    "seed:production": "tsx src/scripts/seed-production.ts",
     "generate:tokens": "node src/scripts/generate-tokens.js",
-    "lint": "eslint src --ext .ts",
-    "seed:production": "tsx src/scripts/seed-production.ts"
+    "lint": "eslint src --ext .ts"
   },
   "dependencies": {
+    "@hapi/boom": "^10.0.1",
     "@prisma/client": "^5.14.0",
     "@types/bcryptjs": "^2.4.6",
     "@types/compression": "^1.7.5",
@@ -25,6 +25,8 @@
     "@types/morgan": "^1.9.9",
     "@types/node": "^20.14.2",
     "@types/node-cron": "^3.0.11",
+    "@types/qrcode": "^1.5.5",
+    "@whiskeysockets/baileys": "^6.7.9",
     "bcryptjs": "^2.4.3",
     "bull": "^4.12.9",
     "compression": "^1.7.4",
@@ -38,17 +40,15 @@
     "jsonwebtoken": "^9.0.2",
     "morgan": "^1.10.0",
     "node-cron": "^3.0.3",
+    "pino": "^9.3.2",
+    "pino-pretty": "^11.2.1",
     "prisma": "^5.14.0",
+    "qrcode": "^1.5.4",
     "tsx": "^4.15.1",
     "typescript": "^5.4.5",
     "winston": "^3.13.0",
     "xlsx": "^0.18.5",
-    "zod": "^3.23.8",
-    "@whiskeysockets/baileys": "^6.7.9",
-    "qrcode": "^1.5.4",
-    "@types/qrcode": "^1.5.5",
-    "pino": "^9.3.2",
-    "pino-pretty": "^11.2.1"
+    "zod": "^3.23.8"
   },
   "devDependencies": {}
 }
