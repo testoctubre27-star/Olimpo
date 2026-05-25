@@ -15,9 +15,8 @@ import fs from 'fs';
 
 // ─── State ────────────────────────────────────
 let sock: WASocket | null = null;
+let currentQR: string | null = null;
 let isConnected = false;
-let pairingCode: string | null = null;
-let pairingPhone: string | null = null;
 let reconnectTimer: ReturnType<typeof setTimeout> | null = null;
 let onMessageCallback: ((phone: string, body: string) => Promise<void>) | null = null;
 
@@ -47,13 +46,6 @@ function sessionPhoneToJid(phone: string, originalJid?: string): string {
   return `${digits}@s.whatsapp.net`;
 }
 
-// ─── Normalize Mexican numbers ────────────────
-export function normalizePhone(raw: string): string {
-  const digits = raw.replace(/[^0-9]/g, '');
-  if (digits.startsWith('521') && digits.length === 13) return '52' + digits.slice(3);
-  return digits;
-}
-
 // ─── DB Auth State ────────────────────────────
 async function syncAuthToDB(): Promise<void> {
   try {
@@ -73,6 +65,7 @@ async function syncAuthToDB(): Promise<void> {
       update: { creds: creds as Prisma.InputJsonValue, keys: keys as Prisma.InputJsonValue },
       create: { id: 'main', creds: creds as Prisma.InputJsonValue, keys: keys as Prisma.InputJsonValue },
     });
+    logger.info('[WA] Sesión sincronizada a DB');
   } catch (err) {
     logger.error('[WA] Error al sincronizar sesión', { err });
   }
@@ -111,7 +104,6 @@ export async function connectWhatsApp(
   const { version }          = await fetchLatestBaileysVersion();
 
   const pinoLogger = pino({ level: 'silent' });
-  const isRegistered = !!state.creds.registered;
 
   sock = makeWASocket({
     version,
@@ -119,7 +111,7 @@ export async function connectWhatsApp(
       creds: state.creds,
       keys:  makeCacheableSignalKeyStore(state.keys, pinoLogger),
     },
-    printQRInTerminal: false,
+    printQRInTerminal: false,  // We display QR via endpoint
     logger: pinoLogger,
     browser: ['OLIMPO', 'Chrome', '120.0'],
     syncFullHistory: false,
@@ -130,30 +122,6 @@ export async function connectWhatsApp(
     },
   });
 
-  // ── Request pairing code immediately ──────────
-  // Must request BEFORE the connection.update 'open' event fires
-  // to avoid 408 timeout. We use a flag to request only once.
-  let pairingRequested = false;
-  if (!isRegistered && pairingPhone) {
-    const phoneForPairing = pairingPhone;
-    // Request code as soon as the socket initializes
-    // Use a short timeout to let the WebSocket handshake start
-    setTimeout(async () => {
-      if (!pairingRequested && sock && phoneForPairing) {
-        pairingRequested = true;
-        try {
-          logger.info(`[WA] Solicitando código de emparejamiento para +${phoneForPairing}`);
-          const code = await sock.requestPairingCode(phoneForPairing);
-          pairingCode = code ?? null;
-          logger.info(`[WA] Código de emparejamiento: ${pairingCode}`);
-        } catch (err) {
-          logger.error('[WA] Error al solicitar código', { err });
-          pairingCode = null;
-        }
-      }
-    }, 1500);
-  }
-
   // ── Creds update ─────────────────────────────
   sock.ev.on('creds.update', async () => {
     await saveCreds();
@@ -162,12 +130,17 @@ export async function connectWhatsApp(
 
   // ── Connection events ─────────────────────────
   sock.ev.on('connection.update', async (update) => {
-    const { connection, lastDisconnect } = update;
+    const { connection, lastDisconnect, qr } = update;
+
+    if (qr) {
+      currentQR   = qr;
+      isConnected = false;
+      logger.info('[WA] QR generado — escanea en /api/whatsapp/qr');
+    }
 
     if (connection === 'open') {
-      isConnected  = true;
-      pairingCode  = null;
-      pairingPhone = null;
+      currentQR   = null;
+      isConnected = true;
       logger.info('[WA] ✅ Conectado exitosamente');
       await syncAuthToDB();
     }
@@ -186,8 +159,6 @@ export async function connectWhatsApp(
         logger.warn('[WA] Sesión cerrada — limpiando DB');
         await prisma.whatsAppSession.deleteMany({ where: { id: 'main' } });
         if (fs.existsSync(AUTH_DIR)) fs.rmSync(AUTH_DIR, { recursive: true });
-        pairingCode  = null;
-        pairingPhone = null;
       }
     }
   });
@@ -195,6 +166,7 @@ export async function connectWhatsApp(
   // ── Incoming messages ─────────────────────────
   sock.ev.on('messages.upsert', async ({ messages, type }) => {
     if (type !== 'notify') return;
+
     for (const msg of messages) {
       if (msg.key.fromMe) continue;
       const remoteJid = msg.key.remoteJid ?? '';
@@ -235,18 +207,6 @@ export async function connectWhatsApp(
   });
 }
 
-// ─── requestPairing ───────────────────────────
-export async function requestPairing(phone: string): Promise<void> {
-  pairingPhone = normalizePhone(phone);
-  pairingCode  = null;
-
-  // Clear existing session so Baileys starts fresh
-  await prisma.whatsAppSession.deleteMany({ where: { id: 'main' } });
-  if (fs.existsSync(AUTH_DIR)) fs.rmSync(AUTH_DIR, { recursive: true });
-
-  logger.info(`[WA] Iniciando emparejamiento para +${pairingPhone}`);
-}
-
 // ─── Send ─────────────────────────────────────
 export interface SendMessageOptions {
   to: string;
@@ -276,9 +236,12 @@ export const WhatsAppAdapter = {
       }).catch(() => undefined);
     }
   },
-  isConnected():     boolean        { return isConnected; },
-  getPairingCode():  string | null  { return pairingCode; },
-  getPairingPhone(): string | null  { return pairingPhone; },
-  getSocket():       WASocket | null { return sock; },
-  getQR():           string | null  { return null; },
+
+  getQR():       string | null  { return currentQR; },
+  isConnected(): boolean        { return isConnected; },
+  getSocket():   WASocket | null { return sock; },
+
+  // Legacy stubs — not used in QR mode
+  getPairingCode():  string | null { return null; },
+  getPairingPhone(): string | null { return null; },
 };
