@@ -106,4 +106,31 @@ router.get('/qr', authenticateQuery, requireAdmin,
   }
 );
 
+// DELETE /api/whatsapp/session — clears saved session and forces new QR
+router.delete('/session', authenticate, requireAdmin,
+  async (_req: Request, res: Response, next: NextFunction): Promise<void> => {
+    try {
+      const { prisma } = await import('../config/database');
+      const path = await import('path');
+      const fs   = await import('fs');
+
+      // Clear DB session
+      await prisma.whatsAppSession.deleteMany({ where: { id: 'main' } });
+
+      // Clear local auth files
+      const AUTH_DIR = path.join(process.cwd(), '.baileys-auth');
+      if (fs.existsSync(AUTH_DIR)) fs.rmSync(AUTH_DIR, { recursive: true });
+
+      // Reconnect to generate fresh QR
+      const { connectWhatsApp } = await import('../adapters/whatsapp.adapter');
+      const { handleIncomingMessage } = await import('../adapters/bot.handler');
+      connectWhatsApp(handleIncomingMessage).catch(() => undefined);
+
+      res.json({ success: true, message: 'Sesión limpiada — generando QR nuevo' });
+    } catch (err) {
+      next(err);
+    }
+  }
+);
+
 export default router;

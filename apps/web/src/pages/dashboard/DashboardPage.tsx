@@ -1,7 +1,9 @@
+import { useState } from 'react';
 import { Users, TrendingUp, AlertTriangle, UserX, DollarSign, Calendar, Wifi, WifiOff, QrCode } from 'lucide-react';
 import { BarChart, Bar, XAxis, YAxis, CartesianGrid, Tooltip, ResponsiveContainer, Cell } from 'recharts';
 import { useDashboard, useWhatsAppStatus } from '../../hooks/useApi';
 import { StatCard, Card, PageSpinner, SectionHeader, Button } from '../../components/ui';
+import { api } from '../../services/api';
 import { formatCurrency, DAY_LABEL, occupancyColor, formatDate, formatCurrency as fc } from '../../utils/labels';
 
 interface WAStatus { connected: boolean; hasQR: boolean; }
@@ -19,6 +21,19 @@ export default function DashboardPage() {
 
   const data     = rawData as DashboardData | undefined;
   const waStatus = rawWA  as WAStatus  | undefined;
+
+  const [clearing, setClearing] = useState(false);
+
+  const handleClearSession = async () => {
+    setClearing(true);
+    try {
+      await api.delete('/whatsapp/session');
+      // Reload QR page after short delay
+      setTimeout(() => window.open(qrUrl, '_blank'), 1500);
+    } catch { /* ignore */ } finally {
+      setClearing(false);
+    }
+  };
 
   const qrUrl = `${import.meta.env.VITE_API_URL?.replace('/api', '') ?? 'http://localhost:4000'}/api/whatsapp/qr?token=${localStorage.getItem('olimpo_token') ?? ''}`;
 
@@ -58,11 +73,18 @@ export default function DashboardPage() {
               </div>
             </div>
             {!waStatus?.connected && (
-              <a href={qrUrl} target="_blank" rel="noopener noreferrer" style={{ textDecoration: 'none' }}>
-                <Button size="sm" icon={<QrCode size={14} />}>
-                  Escanear QR
-                </Button>
-              </a>
+              <div style={{ display: 'flex', gap: 8, flexWrap: 'wrap' }}>
+                <a href={qrUrl} target="_blank" rel="noopener noreferrer" style={{ textDecoration: 'none' }}>
+                  <Button size="sm" icon={<QrCode size={14} />}>
+                    {waStatus?.hasQR ? 'Ver QR' : 'Escanear QR'}
+                  </Button>
+                </a>
+                {!waStatus?.hasQR && (
+                  <Button size="sm" variant="secondary" loading={clearing} onClick={handleClearSession}>
+                    Regenerar QR
+                  </Button>
+                )}
+              </div>
             )}
           </div>
         </Card>
