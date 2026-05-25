@@ -16,15 +16,12 @@ import fs from 'fs';
 // ─── State ────────────────────────────────────
 let sock: WASocket | null = null;
 let isConnected = false;
-let pairingCode: string | null = null;         // 8-digit pairing code
-let pairingPhone: string | null = null;        // Phone number being paired
+let pairingCode: string | null = null;
+let pairingPhone: string | null = null;
 let reconnectTimer: ReturnType<typeof setTimeout> | null = null;
 let onMessageCallback: ((phone: string, body: string) => Promise<void>) | null = null;
 
-// Simple message store so getMessage works on retries
 const msgStore = new Map<string, proto.IMessage>();
-
-// LID → original @lid JID map (for reply routing)
 const lidJidMap = new Map<string, string>();
 
 const AUTH_DIR = path.join(process.cwd(), '.baileys-auth');
@@ -34,29 +31,27 @@ function jidToSessionPhone(jid: string): string | null {
   if (!jid) return null;
   if (jid.endsWith('@g.us')) return null;
   if (jid === 'status@broadcast') return null;
-
-  if (jid.includes('@lid')) {
-    return 'lid_' + jid.split('@')[0];
-  }
-
+  if (jid.includes('@lid')) return 'lid_' + jid.split('@')[0];
   if (jid.endsWith('@s.whatsapp.net')) {
     let raw = jid.split('@')[0].split(':')[0];
-    if (raw.startsWith('521') && raw.length === 13) {
-      raw = '52' + raw.slice(3);
-    }
+    if (raw.startsWith('521') && raw.length === 13) raw = '52' + raw.slice(3);
     return raw;
   }
-
   return null;
 }
 
 function sessionPhoneToJid(phone: string, originalJid?: string): string {
   if (phone.startsWith('lid_') && originalJid) return originalJid;
   let digits = phone.replace(/[^0-9]/g, '');
-  if (digits.startsWith('521') && digits.length === 13) {
-    digits = '52' + digits.slice(3);
-  }
+  if (digits.startsWith('521') && digits.length === 13) digits = '52' + digits.slice(3);
   return `${digits}@s.whatsapp.net`;
+}
+
+// ─── Normalize Mexican numbers ────────────────
+export function normalizePhone(raw: string): string {
+  const digits = raw.replace(/[^0-9]/g, '');
+  if (digits.startsWith('521') && digits.length === 13) return '52' + digits.slice(3);
+  return digits;
 }
 
 // ─── DB Auth State ────────────────────────────
@@ -64,33 +59,20 @@ async function syncAuthToDB(): Promise<void> {
   try {
     if (!fs.existsSync(AUTH_DIR)) return;
     const files = fs.readdirSync(AUTH_DIR);
-
     const creds = files.includes('creds.json')
       ? JSON.parse(fs.readFileSync(path.join(AUTH_DIR, 'creds.json'), 'utf-8'))
       : null;
-
     const keys: Record<string, unknown> = {};
     for (const file of files) {
-      if (file !== 'creds.json' && file.endsWith('.json')) {
+      if (file !== 'creds.json' && file.endsWith('.json'))
         keys[file] = JSON.parse(fs.readFileSync(path.join(AUTH_DIR, file), 'utf-8'));
-      }
     }
-
     if (!creds) return;
-
     await prisma.whatsAppSession.upsert({
       where: { id: 'main' },
-      update: {
-        creds: creds as Prisma.InputJsonValue,
-        keys:  keys  as Prisma.InputJsonValue,
-      },
-      create: {
-        id:    'main',
-        creds: creds as Prisma.InputJsonValue,
-        keys:  keys  as Prisma.InputJsonValue,
-      },
+      update: { creds: creds as Prisma.InputJsonValue, keys: keys as Prisma.InputJsonValue },
+      create: { id: 'main', creds: creds as Prisma.InputJsonValue, keys: keys as Prisma.InputJsonValue },
     });
-    logger.info('[WA] Sesión sincronizada a DB');
   } catch (err) {
     logger.error('[WA] Error al sincronizar sesión', { err });
   }
@@ -100,15 +82,11 @@ async function restoreAuthFromDB(): Promise<boolean> {
   try {
     const session = await prisma.whatsAppSession.findUnique({ where: { id: 'main' } });
     if (!session) return false;
-
     fs.mkdirSync(AUTH_DIR, { recursive: true });
     fs.writeFileSync(path.join(AUTH_DIR, 'creds.json'), JSON.stringify(session.creds));
-
     const keys = session.keys as Record<string, unknown>;
-    for (const [filename, content] of Object.entries(keys)) {
+    for (const [filename, content] of Object.entries(keys))
       fs.writeFileSync(path.join(AUTH_DIR, filename), JSON.stringify(content));
-    }
-
     logger.info('[WA] Sesión restaurada desde DB');
     return true;
   } catch (err) {
@@ -122,7 +100,6 @@ export async function connectWhatsApp(
   onMessage: (phone: string, body: string) => Promise<void>
 ): Promise<void> {
   onMessageCallback = onMessage;
-
   if (reconnectTimer) { clearTimeout(reconnectTimer); reconnectTimer = null; }
 
   logger.info('[WA] Iniciando conexión...');
@@ -133,9 +110,8 @@ export async function connectWhatsApp(
   const { state, saveCreds } = await useMultiFileAuthState(AUTH_DIR);
   const { version }          = await fetchLatestBaileysVersion();
 
-  logger.info(`[WA] Versión Baileys: ${version.join('.')}`);
-
   const pinoLogger = pino({ level: 'silent' });
+  const isRegistered = !!state.creds.registered;
 
   sock = makeWASocket({
     version,
@@ -143,7 +119,6 @@ export async function connectWhatsApp(
       creds: state.creds,
       keys:  makeCacheableSignalKeyStore(state.keys, pinoLogger),
     },
-    // Use pairing code mode (more stable than QR / WhatsApp Web)
     printQRInTerminal: false,
     logger: pinoLogger,
     browser: ['OLIMPO', 'Chrome', '120.0'],
@@ -155,23 +130,27 @@ export async function connectWhatsApp(
     },
   });
 
-  // ── Request pairing code if not registered ────
-  // This runs only when there is no existing session
-  const isRegistered = !!state.creds.registered;
+  // ── Request pairing code immediately (no delay) ──
+  // The 408 timeout was caused by the 3s delay — by the time we requested
+  // the code, WA server had already closed the connection.
+  // Now we request it right after the socket is ready but BEFORE
+  // connection.update fires, using the 'open' event.
   if (!isRegistered && pairingPhone) {
-    // Give socket a moment to initialize before requesting code
-    setTimeout(async () => {
-      try {
-        const phone = pairingPhone!.replace(/[^0-9]/g, '');
-        logger.info(`[WA] Solicitando código de emparejamiento para +${phone}`);
-        const code = await sock!.requestPairingCode(phone);
-        pairingCode = code ?? null;
-        logger.info(`[WA] Código de emparejamiento generado: ${pairingCode}`);
-      } catch (err) {
-        logger.error('[WA] Error al solicitar código de emparejamiento', { err });
-        pairingCode = null;
+    const phoneForPairing = pairingPhone; // capture in closure
+    sock.ev.once('connection.update', async (update) => {
+      // Request code as soon as socket connects, don't wait
+      if (update.connection === 'connecting' || update.qr) {
+        try {
+          logger.info(`[WA] Solicitando código de emparejamiento para +${phoneForPairing}`);
+          const code = await sock!.requestPairingCode(phoneForPairing);
+          pairingCode = code ?? null;
+          logger.info(`[WA] Código de emparejamiento generado: ${pairingCode}`);
+        } catch (err) {
+          logger.error('[WA] Error al solicitar código', { err });
+          pairingCode = null;
+        }
       }
-    }, 3000);
+    });
   }
 
   // ── Creds update ─────────────────────────────
@@ -185,8 +164,8 @@ export async function connectWhatsApp(
     const { connection, lastDisconnect } = update;
 
     if (connection === 'open') {
-      isConnected = true;
-      pairingCode  = null; // Clear code once connected
+      isConnected  = true;
+      pairingCode  = null;
       pairingPhone = null;
       logger.info('[WA] ✅ Conectado exitosamente');
       await syncAuthToDB();
@@ -214,18 +193,14 @@ export async function connectWhatsApp(
 
   // ── Incoming messages ─────────────────────────
   sock.ev.on('messages.upsert', async ({ messages, type }) => {
-    logger.info(`[WA] messages.upsert type=${type} count=${messages.length}`);
     if (type !== 'notify') return;
-
     for (const msg of messages) {
       if (msg.key.fromMe) continue;
-
       const remoteJid = msg.key.remoteJid ?? '';
       if (remoteJid.endsWith('@g.us')) continue;
       if (remoteJid === 'status@broadcast') continue;
       if (!msg.message) continue;
 
-      // Cache message for retry handling
       if (msg.key.id && msg.message) {
         msgStore.set(msg.key.id, msg.message);
         if (msgStore.size > 200) {
@@ -235,10 +210,7 @@ export async function connectWhatsApp(
       }
 
       const sessionPhone = jidToSessionPhone(remoteJid);
-      if (!sessionPhone) {
-        logger.warn(`[WA] JID no reconocido: ${remoteJid}`);
-        continue;
-      }
+      if (!sessionPhone) continue;
 
       const body = (
         msg.message.conversation ??
@@ -249,12 +221,9 @@ export async function connectWhatsApp(
 
       if (!body) continue;
 
-      if (remoteJid.includes('@lid')) {
-        lidJidMap.set(sessionPhone, remoteJid);
-      }
+      if (remoteJid.includes('@lid')) lidJidMap.set(sessionPhone, remoteJid);
 
-      const pushName = msg.pushName ?? '';
-      logger.info(`[WA] ✉️  De: ${sessionPhone} (${pushName}) | "${body.slice(0, 80)}"`);
+      logger.info(`[WA] ✉️  De: ${sessionPhone} | "${body.slice(0, 80)}"`);
 
       if (onMessageCallback) {
         await onMessageCallback(sessionPhone, body).catch(err =>
@@ -265,23 +234,19 @@ export async function connectWhatsApp(
   });
 }
 
-// ─── Public methods ───────────────────────────
-
-/**
- * Initiate pairing with a phone number.
- * Call this before connectWhatsApp if no session exists.
- */
+// ─── requestPairing ───────────────────────────
 export async function requestPairing(phone: string): Promise<void> {
-  pairingPhone = phone.replace(/[^0-9]/g, '');
+  pairingPhone = normalizePhone(phone);
   pairingCode  = null;
 
-  // Clear existing session so Baileys requests a new pairing
+  // Clear existing session so Baileys starts fresh
   await prisma.whatsAppSession.deleteMany({ where: { id: 'main' } });
   if (fs.existsSync(AUTH_DIR)) fs.rmSync(AUTH_DIR, { recursive: true });
 
   logger.info(`[WA] Iniciando emparejamiento para +${pairingPhone}`);
 }
 
+// ─── Send ─────────────────────────────────────
 export interface SendMessageOptions {
   to: string;
   body: string;
@@ -295,42 +260,24 @@ export const WhatsAppAdapter = {
       logger.warn(`[WA] No conectado — mensaje NO enviado a ${opts.to}`);
       return;
     }
-
     const originalLidJid = lidJidMap.get(opts.to);
     const jid = sessionPhoneToJid(opts.to, originalLidJid);
-
     try {
       await sock.sendMessage(jid, { text: opts.body });
-
       await prisma.notificationLog.create({
-        data: {
-          phone:     opts.to,
-          studentId: opts.studentId,
-          type:      opts.type ?? 'GENERAL',
-          message:   opts.body,
-        },
+        data: { phone: opts.to, studentId: opts.studentId, type: opts.type ?? 'GENERAL', message: opts.body },
       });
-
       logger.info(`[WA] ✅ Enviado a ${jid} (${opts.type})`);
     } catch (err) {
       logger.error(`[WA] Error enviando a ${jid}`, { err });
       await prisma.notificationLog.create({
-        data: {
-          phone:     opts.to,
-          studentId: opts.studentId,
-          type:      opts.type ?? 'GENERAL',
-          message:   opts.body,
-          error:     err instanceof Error ? err.message : String(err),
-        },
+        data: { phone: opts.to, studentId: opts.studentId, type: opts.type ?? 'GENERAL', message: opts.body, error: err instanceof Error ? err.message : String(err) },
       }).catch(() => undefined);
     }
   },
-
-  isConnected():    boolean        { return isConnected; },
-  getPairingCode(): string | null  { return pairingCode; },
-  getPairingPhone(): string | null { return pairingPhone; },
-  getSocket():      WASocket | null { return sock; },
-
-  // Legacy QR — kept for backward compat, always null now
-  getQR():          string | null  { return null; },
+  isConnected():     boolean        { return isConnected; },
+  getPairingCode():  string | null  { return pairingCode; },
+  getPairingPhone(): string | null  { return pairingPhone; },
+  getSocket():       WASocket | null { return sock; },
+  getQR():           string | null  { return null; },
 };
