@@ -228,15 +228,43 @@ export async function handleIncomingMessage(phone: string, body: string): Promis
         const DAYS = ['Dom','Lun','Mar','Mié','Jue','Vie','Sáb'];
         // eslint-disable-next-line @typescript-eslint/no-explicit-any
         const schedules = await prisma.schedule.findMany({
-          where: {
-            modality: { modality: modalityEnum as any },
-            isActive: true,
+          where: { modality: { modality: modalityEnum as any }, isActive: true },
+          include: {
+            slots:      { where: { isActive: true } },
+            modality:   true,
+            pairedWith: { include: { slots: { where: { isActive: true } } } },
           },
-          include: { slots: { where: { isActive: true } }, modality: true },
         });
-        availableSchedules = schedules
-          .filter(s => s.slots.length < (s.capacity ?? s.modality.maxCapacity))
-          .map(s => ({ day: DAYS[s.dayOfWeek], time: s.startTime, id: s.id }));
+
+        const seenPairs = new Set<string>();
+
+        for (const s of schedules) {
+          const cap         = s.capacity ?? s.modality.maxCapacity;
+          const hasCapacity = s.slots.length < cap;
+
+          if (s.pairedWithId && (s as any).pairedWith) {
+            // Paired — only show once, under the lower dayOfWeek
+            const pairKey = [s.id, s.pairedWithId].sort().join('-');
+            if (seenPairs.has(pairKey)) continue;
+            seenPairs.add(pairKey);
+
+            const paired    = (s as any).pairedWith;
+            const pairedCap = paired.capacity ?? cap;
+            if (!hasCapacity || paired.slots.length >= pairedCap) continue;
+
+            // Show both days combined e.g. "Lun y Mié"
+            const days = [s.dayOfWeek, paired.dayOfWeek].sort((a, b) => a - b);
+            availableSchedules.push({
+              day:          `${DAYS[days[0]]} y ${DAYS[days[1]]}`,
+              time:         s.startTime,
+              id:           s.id,
+              pairedWithId: s.pairedWithId,
+            } as any);
+          } else if (!s.pairedWithId) {
+            if (!hasCapacity) continue;
+            availableSchedules.push({ day: DAYS[s.dayOfWeek], time: s.startTime, id: s.id });
+          }
+        }
       }
 
       if (availableSchedules.length === 0) {
@@ -264,7 +292,7 @@ export async function handleIncomingMessage(phone: string, body: string): Promis
 
     // ─── AWAITING SCHEDULE ────────────────────
     case ConversationState.AWAITING_SCHEDULE: {
-      const avail = (sd.availableSchedules as { day: string; time: string; id: string }[]) ?? [];
+      const avail = (sd.availableSchedules as { day: string; time: string; id: string; pairedWithId?: string }[]) ?? [];
       const chosen = avail[parseInt(text) - 1];
       if (!chosen) {
         await WhatsAppAdapter.send({ to: phone, body: templates.unknown(), type: 'RETRY' });
@@ -274,7 +302,7 @@ export async function handleIncomingMessage(phone: string, body: string): Promis
         where: { phone },
         data: {
           state: ConversationState.AWAITING_REGULATION_ACCEPT,
-          data: { ...sd, scheduleId: chosen.id } as unknown as Prisma.InputJsonValue,
+          data: { ...sd, scheduleId: chosen.id, pairedScheduleId: (chosen as any).pairedWithId ?? null } as unknown as Prisma.InputJsonValue,
         },
       });
       await WhatsAppAdapter.send({ to: phone, body: templates.sendRegulation(), type: 'REGULATION' });

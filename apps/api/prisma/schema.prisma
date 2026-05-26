@@ -168,12 +168,15 @@ model Schedule {
   isActive   Boolean  @default(true)
   createdAt  DateTime @default(now())
   updatedAt  DateTime @updatedAt
+  pairedWithId String?
 
   modality     ModalityConfig @relation(fields: [modalityId], references: [id])
   teacher      Teacher?       @relation(fields: [teacherId], references: [id])
   slots        ScheduleSlot[]
   waitingList  WaitingList[]
-
+  pairedWith   Schedule?  @relation("SchedulePair", fields: [pairedWithId], references: [id])
+  pairedBy     Schedule[] @relation("SchedulePair")
+  
   @@map("schedules")
 }
 

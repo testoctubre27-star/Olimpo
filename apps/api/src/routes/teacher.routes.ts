@@ -203,6 +203,53 @@ router.patch('/my-schedules/:id', requireTeacher, async (req: Request, res: Resp
   } catch (err) { next(err); }
 });
 
+router.patch('/my-schedules/:id/pair', requireTeacher,
+  async (req: Request, res: Response, next: NextFunction): Promise<void> => {
+    try {
+      const teacher = await getTeacherFromUser(req.user!.sub);
+      if (!teacher) { respond.error(res, { message: 'No autorizado' }, 403); return; }
+
+      const { pairedWithId } = z.object({
+        pairedWithId: z.string().cuid().nullable(),
+      }).parse(req.body);
+
+      // Verify ownership of both schedules
+      const schedule = await prisma.schedule.findFirst({
+        where: { id: req.params.id, teacherId: teacher.id, isActive: true },
+      });
+      if (!schedule) { respond.error(res, { message: 'Horario no encontrado' }, 404); return; }
+
+      if (pairedWithId) {
+        const paired = await prisma.schedule.findFirst({
+          where: { id: pairedWithId, teacherId: teacher.id, isActive: true },
+        });
+        if (!paired) { respond.error(res, { message: 'El horario par no existe o no te pertenece' }, 404); return; }
+
+        // Can't pair with itself
+        if (pairedWithId === req.params.id) {
+          respond.error(res, { message: 'Un horario no puede ser su propio par' }, 400); return;
+        }
+
+        // Set bidirectional pair
+        await prisma.$transaction([
+          prisma.schedule.update({ where: { id: req.params.id }, data: { pairedWithId } }),
+          prisma.schedule.update({ where: { id: pairedWithId }, data: { pairedWithId: req.params.id } }),
+        ]);
+      } else {
+        // Clear pair — also clear the reverse
+        const current = await prisma.schedule.findUnique({ where: { id: req.params.id } });
+        const ops = [prisma.schedule.update({ where: { id: req.params.id }, data: { pairedWithId: null } })];
+        if (current?.pairedWithId) {
+          ops.push(prisma.schedule.update({ where: { id: current.pairedWithId }, data: { pairedWithId: null } }));
+        }
+        await prisma.$transaction(ops);
+      }
+
+      respond.ok(res, { message: pairedWithId ? 'Horarios vinculados correctamente' : 'Vínculo eliminado' });
+    } catch (err) { next(err); }
+  }
+);
+
 // DELETE my-schedules/:id — hard delete if no students, refuse otherwise
 router.delete('/my-schedules/:id', requireTeacher, async (req: Request, res: Response, next: NextFunction): Promise<void> => {
   try {
