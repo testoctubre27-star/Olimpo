@@ -1,6 +1,6 @@
 import { useState } from 'react';
 import { useQuery, useMutation, useQueryClient } from '@tanstack/react-query';
-import { Plus, Trash2, Edit2, Users, Clock, CheckCircle, Link, LinkOff } from 'lucide-react';
+import { Plus, Trash2, Edit2, Users, Clock, CheckCircle, Link, Link2Off } from 'lucide-react';
 import { api } from '../../services/api';
 import { SectionHeader, Card, Button, Badge, Select, Empty } from '../../components/ui';
 import { Modal } from '../../components/ui/Modal';
@@ -240,7 +240,7 @@ export default function MySchedulesPage() {
                       </p>
                     </div>
                     <div style={{ display: 'flex', gap: 2 }}>
-                      <button onClick={() => { setEditSchedule(s); setEditCapacity(String(s.capacity)); }}
+                      <button onClick={() => { setEditSchedule(s); setEditForm({ capacity: String(s.capacity), startTime: s.startTime, endTime: s.endTime, modality: s.modality.modality }); }}
                         style={{ background: 'none', border: 'none', cursor: 'pointer', color: 'var(--text-muted)', padding: 6, borderRadius: 6, display: 'flex' }} title="Editar horario">
                         <Edit2 size={14} />
                       </button>
@@ -276,7 +276,7 @@ export default function MySchedulesPage() {
                       <button onClick={() => handleUnpair(s)}
                         style={{ marginLeft: 'auto', background: 'none', border: 'none', cursor: 'pointer', color: 'var(--primary)', display: 'flex', padding: 2 }}
                         title="Quitar vínculo">
-                        <LinkOff size={11} />
+                        <Link2Off size={11} />
                       </button>
                     </div>
                   )}
