@@ -137,6 +137,7 @@ model ModalityConfig {
   updatedAt   DateTime @updatedAt
 
   schedules Schedule[]
+  scheduleModalities ScheduleModality[]
 
   @@map("modality_configs")
 }
@@ -158,25 +159,26 @@ model Service {
 
 // A recurring time slot on a given weekday
 model Schedule {
-  id         String   @id @default(cuid())
-  modalityId String
-  teacherId  String?  // Teacher who owns this schedule
-  dayOfWeek  Int      // 0=Sun ... 6=Sat
-  startTime  String   // "09:00"
-  endTime    String   // "10:00"
-  capacity   Int      @default(8) // Max students for this specific slot
-  isActive   Boolean  @default(true)
-  createdAt  DateTime @default(now())
-  updatedAt  DateTime @updatedAt
+  id           String   @id @default(cuid())
+  modalityId   String
+  teacherId    String?
+  dayOfWeek    Int
+  startTime    String
+  endTime      String
+  capacity     Int      @default(8)
+  isActive     Boolean  @default(true)
   pairedWithId String?
+  createdAt    DateTime @default(now())
+  updatedAt    DateTime @updatedAt
 
-  modality     ModalityConfig @relation(fields: [modalityId], references: [id])
-  teacher      Teacher?       @relation(fields: [teacherId], references: [id])
-  slots        ScheduleSlot[]
-  waitingList  WaitingList[]
-  pairedWith   Schedule?  @relation("SchedulePair", fields: [pairedWithId], references: [id])
-  pairedBy     Schedule[] @relation("SchedulePair")
-  
+  modality    ModalityConfig @relation(fields: [modalityId], references: [id])
+  teacher     Teacher?       @relation(fields: [teacherId], references: [id])
+  slots       ScheduleSlot[]
+  waitingList WaitingList[]
+  pairedWith  Schedule?      @relation("SchedulePair", fields: [pairedWithId], references: [id])
+  pairedBy    Schedule[]     @relation("SchedulePair")
+  modalities   ScheduleModality[]
+
   @@map("schedules")
 }
 
@@ -196,6 +198,20 @@ model ScheduleSlot {
 
   @@unique([scheduleId, studentId])
   @@map("schedule_slots")
+}
+
+model ScheduleModality {
+  id         String         @id @default(cuid())
+  scheduleId String
+  modalityId String
+  capacity   Int            @default(1)
+  createdAt  DateTime       @default(now())
+
+  schedule  Schedule       @relation(fields: [scheduleId], references: [id], onDelete: Cascade)
+  modality  ModalityConfig @relation(fields: [modalityId], references: [id])
+
+  @@unique([scheduleId, modalityId])
+  @@map("schedule_modalities")
 }
 
 // ─── Students ─────────────────────────────────
