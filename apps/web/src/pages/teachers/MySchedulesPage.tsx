@@ -1,6 +1,6 @@
 import { useState } from 'react';
 import { useQuery, useMutation, useQueryClient } from '@tanstack/react-query';
-import { Plus, Trash2, Edit2, Users, Clock, CheckCircle, Link, Link2Off } from 'lucide-react';
+import { Plus, Trash2, Edit2, Users, Clock, CheckCircle, Link, LinkOff } from 'lucide-react';
 import { api } from '../../services/api';
 import { SectionHeader, Card, Button, Badge, Select, Empty } from '../../components/ui';
 import { Modal } from '../../components/ui/Modal';
@@ -40,7 +40,10 @@ function useCreateSchedule() {
 function useUpdateCapacity() {
   const qc = useQueryClient();
   return useMutation({
-    mutationFn: async ({ id, capacity }: { id: string; capacity: number }) => { const { data } = await api.patch(`/teachers/my-schedules/${id}`, { capacity }); return data; },
+    mutationFn: async ({ id, ...payload }: { id: string; capacity: number; startTime?: string; endTime?: string; modality?: string }) => {
+      const { data } = await api.patch(`/teachers/my-schedules/${id}`, payload);
+      return data;
+    },
     onSuccess: () => qc.invalidateQueries({ queryKey: ['my-schedules'] }),
   });
 }
@@ -95,8 +98,8 @@ export default function MySchedulesPage() {
   const [editSchedule, setEditSchedule] = useState<TeacherSchedule | null>(null);
   const [deleteTarget, setDeleteTarget] = useState<TeacherSchedule | null>(null);
   const [pairTarget,   setPairTarget]   = useState<TeacherSchedule | null>(null);
-  const [editCapacity, setEditCapacity] = useState('');
   const [selectedPairId, setSelectedPairId] = useState('');
+  const [editForm, setEditForm] = useState({ capacity: '', startTime: '', endTime: '', modality: '' });
 
   const [form, setForm] = useState({
     dayOfWeek: '1', startTime: '09:00', endTime: '10:00', modality: '', capacity: '8',
@@ -129,13 +132,20 @@ export default function MySchedulesPage() {
     } catch (err) { toast.error(errMsg(err) ?? 'Error al crear horario'); }
   };
 
-  const handleUpdateCapacity = async () => {
+  const handleUpdateSchedule = async () => {
     if (!editSchedule) return;
-    const cap = Number(editCapacity);
+    const cap = Number(editForm.capacity);
     if (!cap || cap < 1) { toast.error('Ingresa un cupo válido'); return; }
+    if (editForm.startTime >= editForm.endTime) { toast.error('La hora de inicio debe ser antes de la hora fin'); return; }
     try {
-      await updateMutation.mutateAsync({ id: editSchedule.id, capacity: cap });
-      toast.success('Cupo actualizado');
+      await updateMutation.mutateAsync({
+        id:        editSchedule.id,
+        capacity:  cap,
+        startTime: editForm.startTime,
+        endTime:   editForm.endTime,
+        modality:  editForm.modality,
+      });
+      toast.success('Horario actualizado');
       setEditSchedule(null);
     } catch (err) { toast.error(errMsg(err) ?? 'Error al actualizar'); }
   };
@@ -231,7 +241,7 @@ export default function MySchedulesPage() {
                     </div>
                     <div style={{ display: 'flex', gap: 2 }}>
                       <button onClick={() => { setEditSchedule(s); setEditCapacity(String(s.capacity)); }}
-                        style={{ background: 'none', border: 'none', cursor: 'pointer', color: 'var(--text-muted)', padding: 6, borderRadius: 6, display: 'flex' }} title="Editar cupo">
+                        style={{ background: 'none', border: 'none', cursor: 'pointer', color: 'var(--text-muted)', padding: 6, borderRadius: 6, display: 'flex' }} title="Editar horario">
                         <Edit2 size={14} />
                       </button>
                       <button
@@ -266,7 +276,7 @@ export default function MySchedulesPage() {
                       <button onClick={() => handleUnpair(s)}
                         style={{ marginLeft: 'auto', background: 'none', border: 'none', cursor: 'pointer', color: 'var(--primary)', display: 'flex', padding: 2 }}
                         title="Quitar vínculo">
-                        <Link2Off size={11} />
+                        <LinkOff size={11} />
                       </button>
                     </div>
                   )}
@@ -352,18 +362,27 @@ export default function MySchedulesPage() {
       </Modal>
 
       {/* ── Edit capacity modal ── */}
-      <Modal open={!!editSchedule} onClose={() => setEditSchedule(null)} title="Editar cupo" size="sm"
+      <Modal open={!!editSchedule} onClose={() => setEditSchedule(null)} title="Editar horario" size="md"
         footer={<><Button variant="secondary" onClick={() => setEditSchedule(null)}>Cancelar</Button>
-          <Button loading={updateMutation.isPending} onClick={handleUpdateCapacity}>Guardar</Button></>}>
+          <Button loading={updateMutation.isPending} onClick={handleUpdateSchedule}>Guardar</Button></>}>
         {editSchedule && (
           <div style={{ display: 'flex', flexDirection: 'column', gap: 14 }}>
-            <p style={{ fontSize: 14, color: 'var(--text-secondary)' }}>
-              {scheduleLabel(editSchedule)} · {editSchedule.slots.length} inscritos
+            <p style={{ fontSize: 12, color: 'var(--text-muted)' }}>
+              {editSchedule.slots.length > 0 && `${editSchedule.slots.length} alumno(s) inscritos — el cupo no puede bajar de ese número`}
             </p>
+            <Select label="Modalidad" options={MODALITY_OPTIONS.filter(o => o.value !== '')}
+              value={editForm.modality}
+              onChange={e => setEditForm(f => ({ ...f, modality: e.target.value }))} />
+            <div style={{ display: 'grid', gridTemplateColumns: '1fr 1fr', gap: 12 }}>
+              <Select label="Hora inicio" options={TIME_OPTIONS} value={editForm.startTime}
+                onChange={e => setEditForm(f => ({ ...f, startTime: e.target.value }))} />
+              <Select label="Hora fin" options={TIME_OPTIONS} value={editForm.endTime}
+                onChange={e => setEditForm(f => ({ ...f, endTime: e.target.value }))} />
+            </div>
             <div>
-              <label style={{ fontSize: 13, fontWeight: 500, color: 'var(--text-secondary)', marginBottom: 6, display: 'block' }}>Nuevo cupo máximo</label>
-              <input type="number" min={editSchedule.slots.length || 1} max={editSchedule.modality.maxCapacity}
-                value={editCapacity} onChange={e => setEditCapacity(e.target.value)}
+              <label style={{ fontSize: 13, fontWeight: 500, color: 'var(--text-secondary)', marginBottom: 6, display: 'block' }}>Cupo máximo</label>
+              <input type="number" min={editSchedule.slots.length || 1} max={50}
+                value={editForm.capacity} onChange={e => setEditForm(f => ({ ...f, capacity: e.target.value }))}
                 style={{ width: '100%', height: 38, padding: '0 12px', fontSize: 14, border: '1px solid var(--border)', borderRadius: 'var(--radius-md)', fontFamily: 'var(--font-sans)', color: 'var(--text-primary)', background: 'var(--surface)', outline: 'none' }} />
             </div>
           </div>

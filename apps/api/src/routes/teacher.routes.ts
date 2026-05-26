@@ -188,18 +188,68 @@ router.patch('/my-schedules/:id', requireTeacher, async (req: Request, res: Resp
     });
     if (!schedule) { respond.error(res, { message: 'Horario no encontrado' }, 404); return; }
 
-    const { capacity } = z.object({ capacity: z.number().int().min(1).max(50) }).parse(req.body);
+    const body = z.object({
+      capacity:  z.number().int().min(1).max(50).optional(),
+      startTime: z.string().regex(/^\d{2}:\d{2}$/).optional(),
+      endTime:   z.string().regex(/^\d{2}:\d{2}$/).optional(),
+      modality:  z.enum(['BABY_PHASE1','BABY_PHASE2','BABY_PHASE3','GROUP_CHILD','GROUP_ADULT','FREE_ACCESS','AQUA_THERAPY','PERSONAL_CHILD']).optional(),
+    }).parse(req.body);
+
+    // Validate capacity vs enrolled students
+    const capacity = body.capacity ?? schedule.capacity;
     if (capacity < schedule.slots.length) {
       respond.error(res, { message: `No puedes reducir el cupo. Ya tienes ${schedule.slots.length} alumno(s).`, code: 'CAPACITY_BELOW_ENROLLED' }, 422);
       return;
     }
 
+    // Validate modality change
+    let newModalityId = schedule.modalityId;
+    if (body.modality) {
+      const modalityConfig = await prisma.modalityConfig.findUnique({ where: { modality: body.modality as never } });
+      if (!modalityConfig) { respond.error(res, { message: 'Modalidad no encontrada' }, 404); return; }
+      if (capacity > modalityConfig.maxCapacity) {
+        respond.error(res, { message: `El cupo máximo para esta modalidad es ${modalityConfig.maxCapacity}`, code: 'CAPACITY_EXCEEDED' }, 422);
+        return;
+      }
+      newModalityId = modalityConfig.id;
+    }
+
+    // Validate time conflict (excluding current schedule)
+    const startTime = body.startTime ?? schedule.startTime;
+    const endTime   = body.endTime   ?? schedule.endTime;
+    if (body.startTime || body.endTime) {
+      if (startTime >= endTime) {
+        respond.error(res, { message: 'La hora de inicio debe ser antes de la hora fin' }, 422);
+        return;
+      }
+      const conflict = await prisma.schedule.findFirst({
+        where: {
+          teacherId: teacher.id, dayOfWeek: schedule.dayOfWeek, isActive: true,
+          id: { not: req.params.id },
+          OR: [
+            { startTime: { lte: startTime }, endTime: { gt: startTime } },
+            { startTime: { lt: endTime },    endTime: { gte: endTime } },
+            { startTime: { gte: startTime }, endTime: { lte: endTime } },
+          ],
+        },
+      });
+      if (conflict) {
+        respond.error(res, { message: `Conflicto con otro horario (${conflict.startTime}–${conflict.endTime})`, code: 'SCHEDULE_CONFLICT' }, 409);
+        return;
+      }
+    }
+
     const updated = await prisma.schedule.update({
       where: { id: req.params.id },
-      data: { capacity },
+      data: {
+        capacity,
+        startTime:  startTime,
+        endTime:    endTime,
+        modalityId: newModalityId,
+      },
       include: { modality: true, slots: { where: { isActive: true }, include: { student: { select: { id: true, name: true } } } } },
     });
-    respond.ok(res, { data: updated, message: 'Cupo actualizado' });
+    respond.ok(res, { data: updated, message: 'Horario actualizado correctamente' });
   } catch (err) { next(err); }
 });
 
