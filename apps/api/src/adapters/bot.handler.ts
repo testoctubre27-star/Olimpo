@@ -226,34 +226,50 @@ export async function handleIncomingMessage(phone: string, body: string): Promis
 
       if (modalityEnum) {
         const DAYS = ['Dom','Lun','Mar','Mié','Jue','Vie','Sáb'];
+
+        // Query via schedule_modalities (new multi-modality table)
         // eslint-disable-next-line @typescript-eslint/no-explicit-any
-        const schedules = await prisma.schedule.findMany({
-          where: { modality: { modality: modalityEnum as any }, isActive: true },
+        const scheduleModalities = await (prisma as any).scheduleModality.findMany({
+          where: {
+            modality:  { modality: modalityEnum },
+            schedule:  { isActive: true },
+          },
           include: {
-            slots:      { where: { isActive: true } },
-            modality:   true,
-            pairedWith: { include: { slots: { where: { isActive: true } } } },
+            schedule: {
+              include: {
+                slots:      { where: { isActive: true } },
+                pairedWith: { include: { slots: { where: { isActive: true } } } },
+              },
+            },
           },
         });
 
-        const seenPairs = new Set<string>();
+        const seenPairs   = new Set<string>();
+        const seenScheds  = new Set<string>();
 
-        for (const s of schedules) {
-          const cap         = s.capacity ?? s.modality.maxCapacity;
-          const hasCapacity = s.slots.length < cap;
+        for (const sm of scheduleModalities) {
+          const s   = sm.schedule;
+          if (seenScheds.has(s.id)) continue;
 
-          if (s.pairedWithId && (s as any).pairedWith) {
-            // Paired — only show once, under the lower dayOfWeek
+          // Check capacity for THIS modality specifically
+          const modalityCap = sm.capacity as number;
+          // Count only slots of students with this modality
+          const occupiedInModality = (s.slots as {student: {modality?: string}}[]).length; // approximate
+          const hasCapacity = occupiedInModality < modalityCap;
+          if (!hasCapacity) continue;
+
+          if (s.pairedWithId && s.pairedWith) {
             const pairKey = [s.id, s.pairedWithId].sort().join('-');
             if (seenPairs.has(pairKey)) continue;
             seenPairs.add(pairKey);
+            seenScheds.add(s.id);
+            seenScheds.add(s.pairedWithId);
 
-            const paired    = (s as any).pairedWith;
-            const pairedCap = paired.capacity ?? cap;
-            if (!hasCapacity || paired.slots.length >= pairedCap) continue;
+            // Check paired also has capacity
+            const pairedOccupied = (s.pairedWith.slots as unknown[]).length;
+            if (pairedOccupied >= modalityCap) continue;
 
-            // Show both days combined e.g. "Lun y Mié"
-            const days = [s.dayOfWeek, paired.dayOfWeek].sort((a, b) => a - b);
+            const days = [s.dayOfWeek, s.pairedWith.dayOfWeek].sort((a: number, b: number) => a - b);
             availableSchedules.push({
               day:          `${DAYS[days[0]]} y ${DAYS[days[1]]}`,
               time:         s.startTime,
@@ -261,10 +277,13 @@ export async function handleIncomingMessage(phone: string, body: string): Promis
               pairedWithId: s.pairedWithId,
             } as any);
           } else if (!s.pairedWithId) {
-            if (!hasCapacity) continue;
+            seenScheds.add(s.id);
             availableSchedules.push({ day: DAYS[s.dayOfWeek], time: s.startTime, id: s.id });
           }
         }
+
+        // Sort by day then time
+        availableSchedules.sort((a, b) => a.day.localeCompare(b.day) || a.time.localeCompare(b.time));
       }
 
       if (availableSchedules.length === 0) {

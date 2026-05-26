@@ -36,8 +36,13 @@ El cumplimiento de estas reglas ayuda a mantener un ambiente seguro, armónico y
 _¡Tu responsabilidad hace la diferencia! Gracias por ser parte de la familia Olimpo._ 🏊`;
 
 // ─── Number emojis ────────────────────────────
-const NUM_EMOJI = ['1️⃣','2️⃣','3️⃣','4️⃣','5️⃣','6️⃣','7️⃣','8️⃣','9️⃣','🔟',
-  '1️⃣1️⃣','1️⃣2️⃣','1️⃣3️⃣','1️⃣4️⃣','1️⃣5️⃣'];
+const NUM_EMOJI = [
+  '1️⃣','2️⃣','3️⃣','4️⃣','5️⃣','6️⃣','7️⃣','8️⃣','9️⃣','🔟',
+  '1️⃣1️⃣','1️⃣2️⃣','1️⃣3️⃣','1️⃣4️⃣','1️⃣5️⃣','1️⃣6️⃣','1️⃣7️⃣','1️⃣8️⃣','1️⃣9️⃣','2️⃣0️⃣',
+  '2️⃣1️⃣','2️⃣2️⃣','2️⃣3️⃣','2️⃣4️⃣','2️⃣5️⃣','2️⃣6️⃣','2️⃣7️⃣','2️⃣8️⃣','2️⃣9️⃣','3️⃣0️⃣',
+];
+// Max schedules to show — avoids overwhelming the user
+const MAX_SCHEDULES = 20;
 
 // ─── Templates ────────────────────────────────
 export const templates = {
@@ -126,12 +131,16 @@ export const templates = {
   },
 
   askSchedule(available: { day: string; time: string }[]): string {
-    const list = available
-      .map((s, i) => `${NUM_EMOJI[i]} ${s.day} ${s.time}`)
+    const limited = available.slice(0, MAX_SCHEDULES);
+    const list = limited
+      .map((s, i) => `${NUM_EMOJI[i] ?? `${i+1}.`} ${s.day} ${s.time}`)
       .join('\n');
+    const extra = available.length > MAX_SCHEDULES
+      ? `\n\n_...y ${available.length - MAX_SCHEDULES} horarios más. Escribe *AYUDA* para más opciones._`
+      : '';
     return (
       `Excelente. Estos son los horarios disponibles:\n\n` +
-      `${list}\n\n` +
+      `${list}${extra}\n\n` +
       `Responde con el *número* del horario que prefieres.`
     );
   },
