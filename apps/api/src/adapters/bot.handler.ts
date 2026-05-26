@@ -121,8 +121,14 @@ export async function handleIncomingMessage(phone: string, body: string): Promis
     // ─── AWAITING NAME ────────────────────────
     case ConversationState.AWAITING_NAME: {
       const name = body.trim();
-      if (name.length < 2) {
-        await WhatsAppAdapter.send({ to: phone, body: '¿Puedes decirme tu nombre completo?', type: 'RETRY' });
+      // Require at least 3 chars and at least one letter (avoids "???" or "123")
+      const hasLetters = /[a-záéíóúüñA-ZÁÉÍÓÚÜÑ]/.test(name);
+      if (name.length < 3 || !hasLetters) {
+        await WhatsAppAdapter.send({
+          to: phone,
+          body: 'Por favor dime tu *nombre completo* para continuar (ej: Juan García López).',
+          type: 'RETRY',
+        });
         break;
       }
       const menuItems = await buildMenuItems();
@@ -329,6 +335,15 @@ export async function handleIncomingMessage(phone: string, body: string): Promis
     case ConversationState.DELINQUENT:
     case ConversationState.SUSPENDED:
     case ConversationState.PENDING_PAYMENT_CONFIRMATION: {
+      // Allow restart with HOLA or REINICIAR
+      if (text === 'HOLA' || text === 'REINICIAR' || text === 'INICIO') {
+        await prisma.botSession.update({
+          where: { phone },
+          data: { state: ConversationState.AWAITING_NAME, data: {} as unknown as import('@prisma/client').Prisma.InputJsonValue },
+        });
+        await WhatsAppAdapter.send({ to: phone, body: templates.onboardingGreeting(), type: 'RESTART' });
+        break;
+      }
       await WhatsAppAdapter.send({
         to: phone,
         body: 'Hola, recibimos tu mensaje 👋\n\nUn administrador de *OLIMPO* te atenderá en breve.',
@@ -339,6 +354,12 @@ export async function handleIncomingMessage(phone: string, body: string): Promis
 
     default: {
       logger.warn('Unknown bot state', { phone, state: session.state });
+      // Reset stuck sessions
+      await prisma.botSession.update({
+        where: { phone },
+        data: { state: ConversationState.NEW_CONTACT, data: {} as unknown as import('@prisma/client').Prisma.InputJsonValue },
+      });
+      await WhatsAppAdapter.send({ to: phone, body: templates.onboardingGreeting(), type: 'RESET' });
       break;
     }
   }

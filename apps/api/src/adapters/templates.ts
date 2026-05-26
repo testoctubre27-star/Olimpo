@@ -74,7 +74,16 @@ export const templates = {
       orderBy: { name: 'asc' },
     });
 
-    if (modalities.length === 0 && services.length === 0) {
+    // Fetch summer courses BEFORE deciding if menu is empty
+    const courses = await prisma.summerCourse.findMany({
+      where: { status: 'ACTIVE' },
+      include: { enrollments: { where: { status: 'CONFIRMED' } } },
+      orderBy: { startDate: 'asc' },
+    });
+    const availableCourses = courses.filter(c => c.enrollments.length < c.maxCapacity);
+
+    // Now check if there is ANYTHING to show
+    if (modalities.length === 0 && services.length === 0 && availableCourses.length === 0) {
       return (
         `Lo sentimos, no hay modalidades disponibles en este momento.\n\n` +
         `Por favor contáctanos directamente para más información.`
@@ -98,16 +107,8 @@ export const templates = {
       idx++;
     }
 
-    // Append active summer courses
-    const courses = await prisma.summerCourse.findMany({
-      where: { status: 'ACTIVE' },
-      include: { enrollments: { where: { status: 'CONFIRMED' } } },
-      orderBy: { startDate: 'asc' },
-    });
-
-    const availableCourses = courses.filter(c => c.enrollments.length < c.maxCapacity);
     if (availableCourses.length > 0) {
-      msg += `🌊 *CURSOS DE VERANO DISPONIBLES:*\n\n`;
+      if (idx > 0) msg += `🌊 *CURSOS DE VERANO DISPONIBLES:*\n\n`;
       for (const c of availableCourses) {
         const dateOpts: Intl.DateTimeFormatOptions = { day: '2-digit', month: 'short' };
         const start = new Date(c.startDate).toLocaleDateString('es-MX', dateOpts);
