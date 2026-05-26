@@ -199,4 +199,80 @@ export const templates = {
       `Por favor responde con una de las opciones indicadas, o escribe *AYUDA* para hablar con un administrador de *OLIMPO*.`
     );
   },
+
+  activeMenu(name: string, enrolledCount = 1): string {
+    const canAdd = enrolledCount < 5;
+    const addLine = canAdd
+      ? `5️⃣ Inscribir a otra persona (${enrolledCount}/5 inscritos)\n`
+      : `5️⃣ Ya tienes el máximo de 5 personas inscritas\n`;
+    return (
+      `Hola *${name}* 👋 ¿En qué te podemos ayudar?\n\n` +
+      `1️⃣ Ver mi estado de cuenta\n` +
+      `2️⃣ Reportar un pago realizado\n` +
+      `3️⃣ Solicitar cambio de horario\n` +
+      `4️⃣ Hablar con un administrador\n` +
+      addLine + `\n` +
+      `Responde con el *número* de tu elección.`
+    );
+  },
+
+  accountStatus(data: {
+    name: string;
+    modality: string;
+    schedule: string;
+    teacher: string;
+    lastPayment: string | null;
+    status: string;
+    delinquent: boolean;
+  }): string {
+    const statusEmoji = data.delinquent ? '⚠️' : '✅';
+    const statusText  = data.delinquent
+      ? 'Pago pendiente — tu lugar está en riesgo'
+      : 'Al corriente';
+    return (
+      `${statusEmoji} *Estado de cuenta — OLIMPO*\n\n` +
+      `👤 *Alumno:* ${data.name}\n` +
+      `🏊 *Modalidad:* ${data.modality}\n` +
+      `📅 *Horario:* ${data.schedule}\n` +
+      `👨‍🏫 *Instructor/a:* ${data.teacher}\n` +
+      `💳 *Último pago:* ${data.lastPayment ?? 'Sin pagos registrados'}\n` +
+      `📊 *Estatus:* ${statusText}\n\n` +
+      `Si tienes dudas sobre tu cuenta, contáctanos directamente. 🙌`
+    );
+  },
+
+  reportPaymentPrompt(): string {
+    return (
+      `💳 *Reportar pago*\n\n` +
+      `Por favor indícanos:\n` +
+      `- Monto pagado\n` +
+      `- Fecha de pago\n` +
+      `- Método (transferencia, efectivo, terminal)\n\n` +
+      `Escribe los detalles en un solo mensaje y un administrador los verificará. ✅`
+    );
+  },
+
+  changeSchedulePrompt(): string {
+    return (
+      `📅 *Solicitud de cambio de horario*\n\n` +
+      `Por favor indícanos el horario al que deseas cambiarte (día y hora) y un administrador verificará disponibilidad y te responderá a la brevedad.\n\n` +
+      `Escribe tu solicitud y la procesaremos lo antes posible. 🙌`
+    );
+  },
+
+  paymentReportReceived(name: string): string {
+    return (
+      `¡Gracias *${name}*! 📩\n\n` +
+      `Recibimos tu reporte de pago. Un administrador lo verificará y actualizará tu cuenta a la brevedad.\n\n` +
+      `Si necesitas algo más, escribe *MENÚ* en cualquier momento.`
+    );
+  },
+
+  requestReceived(name: string): string {
+    return (
+      `¡Gracias *${name}*! 📩\n\n` +
+      `Recibimos tu solicitud. Un administrador te contactará a la brevedad.\n\n` +
+      `Si necesitas algo más, escribe *MENÚ* en cualquier momento.`
+    );
+  },
 };

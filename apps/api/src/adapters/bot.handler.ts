@@ -355,20 +355,365 @@ export async function handleIncomingMessage(phone: string, body: string): Promis
     case ConversationState.DELINQUENT:
     case ConversationState.SUSPENDED:
     case ConversationState.PENDING_PAYMENT_CONFIRMATION: {
-      // Allow restart with HOLA or REINICIAR
-      if (text === 'HOLA' || text === 'REINICIAR' || text === 'INICIO') {
+      // Find student record
+      const student = await prisma.student.findUnique({
+        where: { phone },
+        include: {
+          payments: { orderBy: { createdAt: 'desc' }, take: 1 },
+          scheduleSlots: {
+            where: { isActive: true },
+            include: { schedule: { include: { modality: true } } },
+          },
+          teacher: { include: { user: { select: { name: true } } } },
+        },
+      });
+      const studentName = student?.name ?? 'Alumno';
+
+      // ── Keywords that always work ───────────
+      if (text === 'MENÚ' || text === 'MENU' || text === 'HOLA' || text === 'INICIO') {
+        // Count enrolled people under this phone
+        const enrolledUnderPhone = await prisma.student.count({ where: { phone } });
+        await WhatsAppAdapter.send({ to: phone, body: templates.activeMenu(studentName, enrolledUnderPhone), type: 'ACTIVE_MENU' });
         await prisma.botSession.update({
           where: { phone },
-          data: { state: ConversationState.AWAITING_NAME, data: {} as unknown as import('@prisma/client').Prisma.InputJsonValue },
+          data: { data: { ...sd, activeMenuStep: 'CHOOSING' } as unknown as import('@prisma/client').Prisma.InputJsonValue },
         });
-        await WhatsAppAdapter.send({ to: phone, body: templates.onboardingGreeting(), type: 'RESTART' });
         break;
       }
-      await WhatsAppAdapter.send({
-        to: phone,
-        body: 'Hola, recibimos tu mensaje 👋\n\nUn administrador de *OLIMPO* te atenderá en breve.',
-        type: 'HANDOFF',
-      });
+
+      // ── Handle active menu navigation ───────
+      const menuStep = sd.activeMenuStep as string | undefined;
+
+      // Waiting for menu choice
+      if (!menuStep || menuStep === 'MAIN') {
+        const enrolledUnderPhone = await prisma.student.count({ where: { phone } });
+        await WhatsAppAdapter.send({ to: phone, body: templates.activeMenu(studentName, enrolledUnderPhone), type: 'ACTIVE_MENU' });
+        await prisma.botSession.update({
+          where: { phone },
+          data: { data: { ...sd, activeMenuStep: 'CHOOSING' } as unknown as import('@prisma/client').Prisma.InputJsonValue },
+        });
+        break;
+      }
+
+      if (menuStep === 'CHOOSING') {
+        switch (text) {
+          case '1': {
+            // Account status
+            const slot    = student?.scheduleSlots?.[0];
+            const DAYS    = ['Dom','Lun','Mar','Mié','Jue','Vie','Sáb'];
+            const schedule = slot
+              ? `${DAYS[slot.schedule.dayOfWeek]} ${slot.schedule.startTime}–${slot.schedule.endTime}`
+              : 'Sin horario asignado';
+            const lastPay  = student?.payments?.[0];
+            const lastPayStr = lastPay
+              ? `${new Date(lastPay.createdAt).toLocaleDateString('es-MX')} — $${Number(lastPay.amount).toLocaleString('es-MX')}`
+              : null;
+            const MODALITY_NAMES: Record<string, string> = {
+              BABY_PHASE1: 'Natación Bebés Fase 1', BABY_PHASE2: 'Natación Bebés Fase 2',
+              BABY_PHASE3: 'Natación Bebés Fase 3', GROUP_CHILD: 'Natación Grupal Infantil',
+              GROUP_ADULT: 'Natación Adultos Grupal', FREE_ACCESS: 'Acceso Libre',
+              AQUA_THERAPY: 'Terapia Acuática', PERSONAL_CHILD: 'Personalizado Infantil',
+            };
+            await WhatsAppAdapter.send({
+              to: phone,
+              body: templates.accountStatus({
+                name:       studentName,
+                modality:   MODALITY_NAMES[student?.modality ?? ''] ?? student?.modality ?? '—',
+                schedule,
+                teacher:    student?.teacher?.user?.name ?? 'Por asignar',
+                lastPayment: lastPayStr,
+                status:     session.state,
+                delinquent: session.state === ConversationState.DELINQUENT,
+              }),
+              type: 'ACCOUNT_STATUS',
+            });
+            await prisma.botSession.update({
+              where: { phone },
+              data: { data: { ...sd, activeMenuStep: 'MAIN' } as unknown as import('@prisma/client').Prisma.InputJsonValue },
+            });
+            break;
+          }
+          case '2': {
+            // Report payment
+            await WhatsAppAdapter.send({ to: phone, body: templates.reportPaymentPrompt(), type: 'REPORT_PAYMENT_PROMPT' });
+            await prisma.botSession.update({
+              where: { phone },
+              data: { data: { ...sd, activeMenuStep: 'AWAITING_PAYMENT_REPORT' } as unknown as import('@prisma/client').Prisma.InputJsonValue },
+            });
+            break;
+          }
+          case '3': {
+            // Request schedule change
+            await WhatsAppAdapter.send({ to: phone, body: templates.changeSchedulePrompt(), type: 'CHANGE_SCHEDULE_PROMPT' });
+            await prisma.botSession.update({
+              where: { phone },
+              data: { data: { ...sd, activeMenuStep: 'AWAITING_SCHEDULE_REQUEST' } as unknown as import('@prisma/client').Prisma.InputJsonValue },
+            });
+            break;
+          }
+          case '4': {
+            // Handoff to admin
+            await WhatsAppAdapter.send({
+              to: phone,
+              body: `Entendido, *${studentName}*. Un administrador de *OLIMPO* te atenderá a la brevedad. 🙌`,
+              type: 'HANDOFF',
+            });
+            await prisma.botSession.update({
+              where: { phone },
+              data: { data: { ...sd, activeMenuStep: 'MAIN' } as unknown as import('@prisma/client').Prisma.InputJsonValue },
+            });
+            break;
+          }
+          case '5': {
+            // Enroll another person
+            const enrolledCount = await prisma.student.count({ where: { phone } });
+            if (enrolledCount >= 5) {
+              await WhatsAppAdapter.send({
+                to: phone,
+                body: `Ya tienes el máximo de *5 personas* inscritas bajo este número. Si necesitas hacer algún cambio, escribe *MENÚ* para ver tus opciones. 🙏`,
+                type: 'MAX_ENROLLED',
+              });
+              await prisma.botSession.update({
+                where: { phone },
+                data: { data: { ...sd, activeMenuStep: 'MAIN' } as unknown as import('@prisma/client').Prisma.InputJsonValue },
+              });
+            } else {
+              await WhatsAppAdapter.send({
+                to: phone,
+                body:
+                  `¡Perfecto! Vamos a inscribir a otra persona bajo este número. 📝\n\n` +
+                  `Por favor dime el *nombre completo* de la persona que deseas inscribir.`,
+                type: 'ENROLL_EXTRA_PROMPT',
+              });
+              await prisma.botSession.update({
+                where: { phone },
+                data: { data: { ...sd, activeMenuStep: 'ENROLL_EXTRA_NAME' } as unknown as import('@prisma/client').Prisma.InputJsonValue },
+              });
+            }
+            break;
+          }
+          default: {
+            const enrolledUnderPhone2 = await prisma.student.count({ where: { phone } });
+            await WhatsAppAdapter.send({ to: phone, body: templates.activeMenu(studentName, enrolledUnderPhone2), type: 'ACTIVE_MENU' });
+            break;
+          }
+        }
+        break;
+      }
+
+      // Waiting for payment report details
+      if (menuStep === 'AWAITING_PAYMENT_REPORT') {
+        // Log payment report in notification log so admin sees it
+        await prisma.notificationLog.create({
+          data: {
+            phone,
+            studentId: student?.id,
+            type:      'PAYMENT_REPORT',
+            message:   `Reporte de pago de ${studentName}: ${body}`,
+          },
+        });
+        await WhatsAppAdapter.send({ to: phone, body: templates.paymentReportReceived(studentName), type: 'PAYMENT_REPORT_RECEIVED' });
+        await prisma.botSession.update({
+          where: { phone },
+          data: { data: { ...sd, activeMenuStep: 'MAIN' } as unknown as import('@prisma/client').Prisma.InputJsonValue },
+        });
+        break;
+      }
+
+      // Waiting for schedule change request
+      if (menuStep === 'AWAITING_SCHEDULE_REQUEST') {
+        await prisma.notificationLog.create({
+          data: {
+            phone,
+            studentId: student?.id,
+            type:      'SCHEDULE_CHANGE_REQUEST',
+            message:   `Solicitud de cambio de horario de ${studentName}: ${body}`,
+          },
+        });
+        await WhatsAppAdapter.send({ to: phone, body: templates.requestReceived(studentName), type: 'REQUEST_RECEIVED' });
+        await prisma.botSession.update({
+          where: { phone },
+          data: { data: { ...sd, activeMenuStep: 'MAIN' } as unknown as import('@prisma/client').Prisma.InputJsonValue },
+        });
+        break;
+      }
+
+      // Collecting name for extra enrollment
+      if (menuStep === 'ENROLL_EXTRA_NAME') {
+        const extraName = body.trim();
+        const hasLetters = /[a-záéíóúüñA-ZÁÉÍÓÚÜÑ]/.test(extraName);
+        if (extraName.length < 3 || !hasLetters) {
+          await WhatsAppAdapter.send({
+            to: phone,
+            body: 'Por favor dime el *nombre completo* de la persona a inscribir (ej: Ana García López).',
+            type: 'RETRY',
+          });
+          break;
+        }
+        // Build menu for new person
+        const newMenuItems = await buildMenuItems();
+        const menuMsg      = await templates.askModality();
+        await prisma.botSession.update({
+          where: { phone },
+          data: { data: { ...sd, activeMenuStep: 'ENROLL_EXTRA_MODALITY', extraName, menuItems: newMenuItems } as unknown as import('@prisma/client').Prisma.InputJsonValue },
+        });
+        await WhatsAppAdapter.send({ to: phone, body: menuMsg, type: 'ENROLL_EXTRA_MODALITY' });
+        break;
+      }
+
+      // Collecting modality for extra enrollment
+      if (menuStep === 'ENROLL_EXTRA_MODALITY') {
+        const extraMenuItems = (sd.menuItems as MenuItem[] | undefined) ?? [];
+        const choiceIdx      = parseInt(text) - 1;
+        const chosen         = extraMenuItems[choiceIdx];
+
+        if (!chosen) {
+          const menuMsg = await templates.askModality();
+          await WhatsAppAdapter.send({
+            to: phone,
+            body: `Por favor elige una opción válida:\n\n${menuMsg}`,
+            type: 'RETRY',
+          });
+          break;
+        }
+
+        const extraName = sd.extraName as string;
+
+        // Create the extra student linked to same phone
+        const existingCount = await prisma.student.count({ where: { phone } });
+        if (existingCount >= 5) {
+          await WhatsAppAdapter.send({
+            to: phone,
+            body: `Ya tienes el máximo de *5 personas* inscritas bajo este número. No es posible agregar más.`,
+            type: 'MAX_ENROLLED',
+          });
+          await prisma.botSession.update({
+            where: { phone },
+            data: { data: { ...sd, activeMenuStep: 'MAIN', extraName: undefined, menuItems: undefined } as unknown as import('@prisma/client').Prisma.InputJsonValue },
+          });
+          break;
+        }
+
+        // For courses: show course info and ask confirm
+        if (chosen.type === 'course') {
+          const course = await prisma.summerCourse.findUnique({
+            where: { id: chosen.id },
+            include: { enrollments: { where: { status: 'CONFIRMED' } } },
+          });
+          if (!course) { await WhatsAppAdapter.send({ to: phone, body: templates.unknown(), type: 'RETRY' }); break; }
+
+          const spotsLeft = course.maxCapacity - course.enrollments.length;
+          const priceStr  = `$${Number(course.price).toLocaleString('es-MX')}`;
+          const dateOpts: Intl.DateTimeFormatOptions = { day: '2-digit', month: 'long' };
+          const startStr  = new Date(course.startDate).toLocaleDateString('es-MX', dateOpts);
+          const endStr    = new Date(course.endDate).toLocaleDateString('es-MX', dateOpts);
+
+          await prisma.botSession.update({
+            where: { phone },
+            data: { data: { ...sd, activeMenuStep: 'ENROLL_EXTRA_COURSE_CONFIRM', extraCourseId: chosen.id, extraCourseName: chosen.name } as unknown as import('@prisma/client').Prisma.InputJsonValue },
+          });
+          await WhatsAppAdapter.send({
+            to: phone,
+            body:
+              `🏊 *${course.name}* para *${extraName}*\n\n` +
+              `📅 ${startStr} al ${endStr} · ${course.period}\n` +
+              `💰 ${priceStr} por el curso completo\n` +
+              `✅ Lugares disponibles: ${spotsLeft}\n\n` +
+              `¿Confirmas la reserva?\n1️⃣ Sí\n2️⃣ No`,
+            type: 'ENROLL_EXTRA_COURSE_INFO',
+          });
+          break;
+        }
+
+        // For regular modality: create student and notify admin
+        const modEnum = (chosen.modalityEnum ?? 'FREE_ACCESS') as any;
+        await prisma.student.create({
+          data: {
+            phone,
+            name:              extraName,
+            modality:          modEnum,
+            conversationState: ConversationState.PENDING_PAYMENT_CONFIRMATION,
+            regulationAcceptedAt: new Date(),
+            regulationVersion: '1.0',
+            conversationData:  {} as any,
+          },
+        });
+
+        await prisma.notificationLog.create({
+          data: {
+            phone,
+            type:    'EXTRA_ENROLLMENT',
+            message: `Nueva inscripción adicional: ${extraName} — ${chosen.name} (mismo número que ${studentName})`,
+          },
+        });
+
+        await WhatsAppAdapter.send({
+          to: phone,
+          body:
+            `✅ ¡Listo! *${extraName}* ha sido registrado/a en *${chosen.name}*.\n\n` +
+            `Un administrador los contactará para confirmar el pago y asignar horario. 🏊\n\n` +
+            `Escribe *MENÚ* si necesitas algo más.`,
+          type: 'ENROLL_EXTRA_DONE',
+        });
+        await prisma.botSession.update({
+          where: { phone },
+          data: { data: { ...sd, activeMenuStep: 'MAIN', extraName: undefined, menuItems: undefined } as unknown as import('@prisma/client').Prisma.InputJsonValue },
+        });
+        break;
+      }
+
+      // Confirm extra enrollment in a course
+      if (menuStep === 'ENROLL_EXTRA_COURSE_CONFIRM') {
+        const extraName    = sd.extraName as string;
+        const extraCourseId = sd.extraCourseId as string;
+        const extraCourseName = sd.extraCourseName as string;
+
+        if (text === '1' || text === 'SÍ' || text === 'SI') {
+          // Create student and enrollment
+          const newStudent = await prisma.student.create({
+            data: {
+              phone,
+              name:              extraName,
+              modality:          'FREE_ACCESS' as any,
+              conversationState: ConversationState.PENDING_PAYMENT_CONFIRMATION,
+              regulationAcceptedAt: new Date(),
+              regulationVersion: '1.0',
+              conversationData:  {} as any,
+            },
+          });
+          await prisma.summerCourseEnrollment.create({
+            data: { courseId: extraCourseId, studentId: newStudent.id, studentPhone: phone, studentName: extraName, status: 'PENDING' },
+          }).catch(() => undefined);
+          await prisma.notificationLog.create({
+            data: { phone, type: 'EXTRA_ENROLLMENT', message: `Nueva inscripción adicional al curso "${extraCourseName}": ${extraName} (mismo número que ${studentName})` },
+          });
+          await WhatsAppAdapter.send({
+            to: phone,
+            body:
+              `✅ ¡Listo! *${extraName}* ha sido registrado/a en *${extraCourseName}*.\n\n` +
+              `Para apartar el lugar se requiere el *50% del costo total* como anticipo. Un administrador los contactará. 🏊\n\n` +
+              `Escribe *MENÚ* si necesitas algo más.`,
+            type: 'ENROLL_EXTRA_DONE',
+          });
+        } else {
+          await WhatsAppAdapter.send({ to: phone, body: `Entendido, cancelamos la inscripción de *${extraName}*. Escribe *MENÚ* si necesitas algo más.`, type: 'ENROLL_EXTRA_CANCELLED' });
+        }
+        await prisma.botSession.update({
+          where: { phone },
+          data: { data: { ...sd, activeMenuStep: 'MAIN', extraName: undefined, extraCourseId: undefined, extraCourseName: undefined, menuItems: undefined } as unknown as import('@prisma/client').Prisma.InputJsonValue },
+        });
+        break;
+      }
+
+      // Default — show menu
+      {
+        const enrolledUnderPhone = await prisma.student.count({ where: { phone } });
+        await WhatsAppAdapter.send({ to: phone, body: templates.activeMenu(studentName, enrolledUnderPhone), type: 'ACTIVE_MENU' });
+        await prisma.botSession.update({
+          where: { phone },
+          data: { data: { ...sd, activeMenuStep: 'CHOOSING' } as unknown as import('@prisma/client').Prisma.InputJsonValue },
+        });
+      }
       break;
     }
 
