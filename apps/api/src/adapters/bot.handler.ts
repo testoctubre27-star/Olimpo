@@ -653,33 +653,22 @@ export async function handleIncomingMessage(phone: string, body: string): Promis
           break;
         }
 
-        // For regular modality: create student and notify admin
-        const modEnum = (chosen.modalityEnum ?? 'FREE_ACCESS') as any;
-        await prisma.student.create({
-          data: {
-            phone,
-            name:              extraName,
-            modality:          modEnum,
-            conversationState: ConversationState.PENDING_PAYMENT_CONFIRMATION,
-            regulationAcceptedAt: new Date(),
-            regulationVersion: '1.0',
-            conversationData:  {} as any,
-          },
-        });
-
+        // For regular modality: notify admin via log — don't create student record
+        // because phone is @unique and multiple people share the same number.
+        // Admin registers them manually from the panel.
         await prisma.notificationLog.create({
           data: {
             phone,
             type:    'EXTRA_ENROLLMENT',
-            message: `Nueva inscripción adicional: ${extraName} — ${chosen.name} (mismo número que ${studentName})`,
+            message: `Solicitud de inscripción adicional: *${extraName}* en *${chosen.name}* (${chosen.modalityEnum ?? chosen.type}) — solicitado por ${studentName} (${phone}). Registrar manualmente desde el panel de administración.`,
           },
         });
 
         await WhatsAppAdapter.send({
           to: phone,
           body:
-            `✅ ¡Listo! *${extraName}* ha sido registrado/a en *${chosen.name}*.\n\n` +
-            `Un administrador los contactará para confirmar el pago y asignar horario. 🏊\n\n` +
+            `✅ ¡Registramos el interés de *${extraName}* en *${chosen.name}*!\n\n` +
+            `Un administrador los contactará para confirmar el pago, asignar horario y completar el registro. 🏊\n\n` +
             `Escribe *MENÚ* si necesitas algo más.`,
           type: 'ENROLL_EXTRA_DONE',
         });
@@ -690,6 +679,7 @@ export async function handleIncomingMessage(phone: string, body: string): Promis
         break;
       }
 
+
       // Confirm extra enrollment in a course
       if (menuStep === 'ENROLL_EXTRA_COURSE_CONFIRM') {
         const extraName    = sd.extraName as string;
@@ -697,29 +687,16 @@ export async function handleIncomingMessage(phone: string, body: string): Promis
         const extraCourseName = sd.extraCourseName as string;
 
         if (text === '1' || text === 'SÍ' || text === 'SI') {
-          // Create student and enrollment
-          const newStudent = await prisma.student.create({
-            data: {
-              phone,
-              name:              extraName,
-              modality:          'FREE_ACCESS' as any,
-              conversationState: ConversationState.PENDING_PAYMENT_CONFIRMATION,
-              regulationAcceptedAt: new Date(),
-              regulationVersion: '1.0',
-              conversationData:  {} as any,
-            },
-          });
-          await prisma.summerCourseEnrollment.create({
-            data: { courseId: extraCourseId, studentId: newStudent.id, studentPhone: phone, studentName: extraName, status: 'PENDING' },
-          }).catch(() => undefined);
+          // Notify admin to register manually — can't create student with duplicate phone
           await prisma.notificationLog.create({
-            data: { phone, type: 'EXTRA_ENROLLMENT', message: `Nueva inscripción adicional al curso "${extraCourseName}": ${extraName} (mismo número que ${studentName})` },
+            data: { phone, type: 'EXTRA_ENROLLMENT', message: `Solicitud de inscripción adicional al curso "${extraCourseName}": *${extraName}* — solicitado por ${studentName} (${phone}). Registrar manualmente desde el panel. Recordar solicitar 50% de anticipo.` },
           });
           await WhatsAppAdapter.send({
             to: phone,
             body:
-              `✅ ¡Listo! *${extraName}* ha sido registrado/a en *${extraCourseName}*.\n\n` +
-              `Para apartar el lugar se requiere el *50% del costo total* como anticipo. Un administrador los contactará. 🏊\n\n` +
+              `✅ ¡Reservamos el lugar de *${extraName}* en *${extraCourseName}*!\n\n` +
+              `Para apartar el lugar se requiere el *50% del costo total* como anticipo.\n` +
+              `Un administrador los contactará para coordinar el pago. 🏊\n\n` +
               `Escribe *MENÚ* si necesitas algo más.`,
             type: 'ENROLL_EXTRA_DONE',
           });
