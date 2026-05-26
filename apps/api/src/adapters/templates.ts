@@ -6,11 +6,11 @@ export const REGLAMENTO_TEXT = `📋 *REGLAMENTO OLIMPO — 10 Reglas para una E
 *1. PAGA A TIEMPO*
 Realiza tu pago dentro de los días establecidos (1 al 5 o 15 al 20 de cada mes) vía transferencia o terminal. Tu horario se mantiene solo con tu pago puntual.
 
-*2. ATENDE LOS RECORDATORIOS*
+*2. ATIENDE LOS RECORDATORIOS*
 Si no realizas tu pago, recibirás un mensaje de recordatorio. De no pagar, tu horario saldrá en oferta.
 
 *3. ACOMPAÑANTES*
-El acceso se limita a una persona por alumno. Debe permanecer en el área de espera durante la clase.
+El acceso se limita a dos personas por alumno. Deben permanecer en el área de espera durante la clase.
 
 *4. LLEGA A TIEMPO*
 Tolerancia máxima: 15 min en clases personales, 20 min en clases grupales. Después de ese tiempo, puedes perder tu clase.
@@ -144,7 +144,17 @@ export const templates = {
     );
   },
 
-  regulationConfirmed(name: string): string {
+  regulationConfirmed(name: string, isCourse = false): string {
+    if (isCourse) {
+      return (
+        `¡Gracias, ${name}! ✅ Tu aceptación del reglamento ha quedado registrada.\n\n` +
+        `Para *apartar tu lugar* en el curso, el siguiente paso es realizar un pago del *50% del costo total* como anticipo.\n\n` +
+        `Puedes pagar:\n` +
+        `🏦 Transferencia bancaria\n` +
+        `💳 Terminal en el centro\n\n` +
+        `Un administrador te contactará para confirmar tu anticipo y reservar tu lugar oficial. ¡Gracias por elegirnos! 🏊`
+      );
+    }
     return (
       `¡Gracias, ${name}! ✅ Tu aceptación del reglamento ha quedado registrada.\n\n` +
       `El siguiente paso es realizar tu pago de *inscripción ($200 MXN)* y primera mensualidad.\n\n` +

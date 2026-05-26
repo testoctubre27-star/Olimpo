@@ -344,7 +344,7 @@ export async function handleIncomingMessage(phone: string, body: string): Promis
 
       await WhatsAppAdapter.send({
         to: phone,
-        body: templates.regulationConfirmed(name),
+        body: templates.regulationConfirmed(name, !!(sd.isCourse)),
         type: 'REGULATION_CONFIRMED',
       });
       break;
