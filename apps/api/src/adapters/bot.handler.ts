@@ -146,12 +146,32 @@ export async function handleIncomingMessage(phone: string, body: string): Promis
 
     // ─── AWAITING MODALITY ────────────────────
     case ConversationState.AWAITING_MODALITY: {
-      const menuItems  = (sd.menuItems as MenuItem[]) ?? [];
-      const choiceIdx  = parseInt(text) - 1;
-      const chosen     = menuItems[choiceIdx];
+      let menuItems = (sd.menuItems as MenuItem[] | undefined);
+
+      // If menuItems is missing or empty, regenerate menu
+      // This fixes sessions that got stuck before courses were active
+      if (!menuItems || menuItems.length === 0) {
+        menuItems = await buildMenuItems();
+        const menuMsg = await templates.askModality();
+        await prisma.botSession.update({
+          where: { phone },
+          data: { data: { ...sd, menuItems } as unknown as import('@prisma/client').Prisma.InputJsonValue },
+        });
+        await WhatsAppAdapter.send({ to: phone, body: menuMsg, type: 'ASK_MODALITY' });
+        break;
+      }
+
+      const choiceIdx = parseInt(text) - 1;
+      const chosen    = menuItems[choiceIdx];
 
       if (!chosen) {
-        await WhatsAppAdapter.send({ to: phone, body: templates.unknown(), type: 'RETRY' });
+        // Also show menu again if invalid choice
+        const menuMsg = await templates.askModality();
+        await WhatsAppAdapter.send({
+          to: phone,
+          body: `Por favor elige una opción del menú respondiendo con su número:\n\n${menuMsg}`,
+          type: 'RETRY',
+        });
         break;
       }
 
