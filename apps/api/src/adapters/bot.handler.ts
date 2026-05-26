@@ -299,7 +299,13 @@ export async function handleIncomingMessage(phone: string, body: string): Promis
         const student = await prisma.student.findUnique({ where: { phone } });
         if (student) {
           await prisma.summerCourseEnrollment.create({
-            data: { courseId: sd.courseId as string, studentId: student.id, status: 'PENDING' },
+            data: {
+              courseId:    sd.courseId as string,
+              studentId:   student.id,
+              studentPhone: phone,
+              studentName:  name,
+              status:      'PENDING',
+            },
           }).catch(() => undefined);
           logger.info(`[BOT] Reserva curso "${sd.courseName}" — ${name} (${phone})`);
         }
