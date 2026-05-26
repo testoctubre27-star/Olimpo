@@ -109,17 +109,52 @@ export async function handleIncomingMessage(phone: string, body: string): Promis
 
       // ── Summer course selected ────────────
       if (chosen.type === 'course') {
-        const course = await prisma.summerCourse.findUnique({ where: { id: chosen.id } });
+        const course = await prisma.summerCourse.findUnique({
+          where: { id: chosen.id },
+          include: { enrollments: { where: { status: 'CONFIRMED' } } },
+        });
         if (!course) { await WhatsAppAdapter.send({ to: phone, body: templates.unknown(), type: 'RETRY' }); break; }
+
+        const spotsLeft = course.maxCapacity - course.enrollments.length;
+        const dateOpts: Intl.DateTimeFormatOptions = { day: '2-digit', month: 'long' };
+        const start = new Date(course.startDate).toLocaleDateString('es-MX', dateOpts);
+        const end   = new Date(course.endDate).toLocaleDateString('es-MX', dateOpts);
+        const price = `$${Number(course.price).toLocaleString('es-MX')}`;
+
+        const courseInfo =
+          `🏊 *${course.name}*
+
+` +
+          `📅 *Fechas:* ${start} al ${end}
+` +
+          `🕐 *Horario:* ${course.period}
+` +
+          `💰 *Precio:* ${price} MXN por el curso completo
+` +
+          `✅ *Lugares disponibles:* ${spotsLeft}
+
+` +
+          `Al apartar tu cupo, reservas tu lugar para *las 4 semanas completas* del curso.
+
+` +
+          `Puedes pagar el curso completo en un solo pago o semanalmente coordinando con administración.
+
+` +
+          `¿Deseas reservar tu cupo?
+
+` +
+          `1️⃣ Sí, quiero reservar mi lugar
+` +
+          `2️⃣ No por ahora`;
 
         await prisma.botSession.update({
           where: { phone },
           data: {
-            state: ConversationState.AWAITING_REGULATION_ACCEPT,
+            state: 'AWAITING_COURSE_CONFIRM' as never,
             data: { ...sessionData, courseId: course.id, courseName: course.name, isCourse: true },
           },
         });
-        await WhatsAppAdapter.send({ to: phone, body: templates.sendRegulation(), type: 'REGULATION' });
+        await WhatsAppAdapter.send({ to: phone, body: courseInfo, type: 'COURSE_INFO' });
         break;
       }
 
@@ -234,16 +269,20 @@ export async function handleIncomingMessage(phone: string, body: string): Promis
       });
 
       // If it was a summer course, register the enrollment
-      if ((sessionData as Record<string, unknown>).isCourse && (sessionData as Record<string, string>).courseId) {
+      const sd = sessionData as Record<string, unknown>;
+      if (sd.isCourse && sd.courseId) {
         const student = await prisma.student.findUnique({ where: { phone } });
         if (student) {
           await prisma.summerCourseEnrollment.create({
             data: {
-              courseId:  (sessionData as Record<string, string>).courseId,
+              courseId:  sd.courseId as string,
               studentId: student.id,
               status:    'PENDING',
             },
           }).catch(() => undefined); // ignore if already enrolled
+
+          // Notify admin via log
+          logger.info(`[BOT] Nuevo interés en curso de verano "${sd.courseName}" — alumno: ${name} (${phone})`);
         }
       }
 
@@ -257,6 +296,49 @@ export async function handleIncomingMessage(phone: string, body: string): Promis
         body: templates.regulationConfirmed(name),
         type: 'REGULATION_CONFIRMED',
       });
+      break;
+    }
+
+    // ─── AWAITING COURSE CONFIRMATION ────────
+    case 'AWAITING_COURSE_CONFIRM' as never: {
+      const sessionData = (session.data as Record<string, unknown>) ?? {};
+
+      if (text === '1' || text.includes('SÍ') || text.includes('SI') || text === 'QUIERO') {
+        // Move to regulation
+        await prisma.botSession.update({
+          where: { phone },
+          data: { state: ConversationState.AWAITING_REGULATION_ACCEPT },
+        });
+        await WhatsAppAdapter.send({
+          to: phone,
+          body: `¡Perfecto! 🎉 Antes de confirmar tu reserva, necesitamos que leas y aceptes nuestro reglamento:`,
+          type: 'COURSE_CONFIRM',
+        });
+        await WhatsAppAdapter.send({ to: phone, body: templates.sendRegulation(), type: 'REGULATION' });
+      } else if (text === '2' || text.includes('NO')) {
+        // Cancel — go back to menu
+        const menuItems = await buildMenuItems();
+        const menuMsg   = await templates.askModality();
+        await prisma.botSession.update({
+          where: { phone },
+          data: {
+            state: ConversationState.AWAITING_MODALITY,
+            data: { ...(sessionData as object), menuItems },
+          },
+        });
+        await WhatsAppAdapter.send({ to: phone, body: `Sin problema. ¿Hay algo más en lo que te podamos ayudar?
+
+${menuMsg}`, type: 'MENU_BACK' });
+      } else {
+        await WhatsAppAdapter.send({
+          to: phone,
+          body: `Por favor responde:
+
+1️⃣ Sí, quiero reservar mi lugar
+2️⃣ No por ahora`,
+          type: 'RETRY',
+        });
+      }
       break;
     }
 
