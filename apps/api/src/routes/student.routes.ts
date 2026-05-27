@@ -22,7 +22,7 @@ const createStudentSchema = z.object({
     'BABY_PHASE1','BABY_PHASE2','BABY_PHASE3',
     'GROUP_CHILD','GROUP_ADULT','FREE_ACCESS','AQUA_THERAPY','PERSONAL_CHILD',
   ]),
-  scheduleId:     z.string().cuid('Selecciona un horario'),
+  scheduleId:     z.string().cuid().optional(),   // optional — assigned later
   teacherId:      z.string().cuid().optional(),
   tutorName:      z.string().optional(),
 
@@ -46,28 +46,28 @@ router.post('/', requireAdmin, audit('STUDENT_CREATED_MANUALLY', 'Student'),
         return;
       }
 
-      // Verify schedule exists and has capacity
-      const schedule = await prisma.schedule.findUnique({
-        where: { id: body.scheduleId },
-        include: {
-          slots:    { where: { isActive: true } },
-          modality: true,
-        },
-      });
-      if (!schedule) {
-        respond.error(res, { message: 'El horario seleccionado no existe' }, 404);
-        return;
-      }
-
-      const maxCap = schedule.capacity ?? schedule.modality.maxCapacity;
-      if (schedule.slots.length >= maxCap) {
-        respond.error(res, { message: 'El horario seleccionado ya no tiene cupo disponible' }, 409);
-        return;
+      // Verify schedule only if provided
+      // eslint-disable-next-line @typescript-eslint/no-explicit-any
+      let schedule: any = null;
+      if (body.scheduleId) {
+        schedule = await prisma.schedule.findUnique({
+          where: { id: body.scheduleId },
+          include: { slots: { where: { isActive: true } }, modality: true },
+        });
+        if (!schedule) {
+          respond.error(res, { message: 'El horario seleccionado no existe' }, 404);
+          return;
+        }
+        const maxCap = schedule.capacity ?? schedule.modality.maxCapacity;
+        if ((schedule.slots?.length ?? 0) >= maxCap) {
+          respond.error(res, { message: 'El horario seleccionado ya no tiene cupo disponible' }, 409);
+          return;
+        }
       }
 
       // Get teacher from schedule if not provided
       const teacherId = body.teacherId
-        ?? (await prisma.scheduleSlot.findFirst({ where: { scheduleId: body.scheduleId, isActive: true } }))?.teacherId
+        ?? (body.scheduleId ? (await prisma.scheduleSlot.findFirst({ where: { scheduleId: body.scheduleId, isActive: true } }))?.teacherId : undefined)
         ?? undefined;
 
       // Create student directly as ACTIVE
@@ -87,25 +87,30 @@ router.post('/', requireAdmin, audit('STUDENT_CREATED_MANUALLY', 'Student'),
         },
       });
 
-      // Create schedule slot
-      await prisma.scheduleSlot.create({
-        data: {
-          scheduleId: body.scheduleId,
-          studentId:  student.id,
-          teacherId:  teacherId ?? null,
-          isActive:   true,
-        },
-      });
+      // Create schedule slot only if schedule was provided
+      if (body.scheduleId) {
+        await prisma.scheduleSlot.create({
+          data: {
+            scheduleId: body.scheduleId,
+            studentId:  student.id,
+            teacherId:  teacherId ?? null,
+            isActive:   true,
+          },
+        });
+      }
 
       // Register payment if requested
       if (body.registerPayment && body.paymentType) {
         const period = body.paymentPeriod
           ?? new Date().toISOString().slice(0, 7); // default current month
 
+        const fallbackFee = schedule
+          ? (typeof schedule.modality.monthlyFee === 'object'
+              ? (schedule.modality.monthlyFee as { toNumber: () => number }).toNumber()
+              : Number(schedule.modality.monthlyFee))
+          : 0;
         const amount = body.paymentAmount
-          ?? (body.paymentType === 'ENROLLMENT'
-            ? 200
-            : schedule.modality.monthlyFee);
+          ?? (body.paymentType === 'ENROLLMENT' ? 200 : fallbackFee);
 
         await prisma.payment.create({
           data: {
