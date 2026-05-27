@@ -16,22 +16,24 @@ const activateSchema = z.object({
 
 // ─── CREATE STUDENT MANUALLY (admin) ─────────
 const createStudentSchema = z.object({
-  name:           z.string().min(2, 'El nombre es requerido'),
-  phone:          z.string().min(8, 'El teléfono es requerido'),
-  modality:       z.enum([
+  name:     z.string().min(2, 'El nombre es requerido'),
+  phone:    z.string().min(8, 'El teléfono es requerido'),
+  modality: z.enum([
     'BABY_PHASE1','BABY_PHASE2','BABY_PHASE3',
     'GROUP_CHILD','GROUP_ADULT','FREE_ACCESS','AQUA_THERAPY','PERSONAL_CHILD',
-  ]),
-  scheduleId:     z.string().cuid().optional(),   // optional — assigned later
-  teacherId:      z.string().cuid().optional(),
-  tutorName:      z.string().optional(),
+  ]).default('FREE_ACCESS'),
 
-  // Payment info
-  registerPayment:   z.boolean().default(false),
-  paymentType:       z.enum(['ENROLLMENT','MONTHLY']).optional(),
-  paymentPeriod:     z.string().regex(/^\d{4}-\d{2}$/).optional(),  // YYYY-MM
-  paymentAmount:     z.number().positive().optional(),
-  paymentNotes:      z.string().optional(),
+  // All optional — assigned later by admin
+  scheduleId:  z.string().optional().nullable(),
+  teacherId:   z.string().optional().nullable(),
+  tutorName:   z.string().optional().nullable(),
+
+  // Payment — all optional
+  registerPayment: z.boolean().optional().default(false),
+  paymentType:     z.enum(['ENROLLMENT','MONTHLY']).optional().default('MONTHLY'),
+  paymentPeriod:   z.string().optional(),
+  paymentAmount:   z.number().optional(),
+  paymentNotes:    z.string().optional(),
 });
 
 router.post('/', requireAdmin, audit('STUDENT_CREATED_MANUALLY', 'Student'),
@@ -168,6 +170,63 @@ router.get('/:id', requireTeacher, async (req: Request, res: Response, next: Nex
     respond.ok(res, { data: student });
   } catch (err) { next(err); }
 });
+
+// ─── UPDATE ───────────────────────────────────
+router.patch('/:id', requireAdmin, audit('STUDENT_UPDATED', 'Student'),
+  async (req: Request, res: Response, next: NextFunction): Promise<void> => {
+    try {
+      const body = z.object({
+        name:      z.string().min(2).optional(),
+        phone:     z.string().min(8).optional(),
+        modality:  z.enum(['BABY_PHASE1','BABY_PHASE2','BABY_PHASE3','GROUP_CHILD','GROUP_ADULT','FREE_ACCESS','AQUA_THERAPY','PERSONAL_CHILD']).optional(),
+        tutorName: z.string().optional().nullable(),
+        teacherId: z.string().optional().nullable(),
+        status:    z.enum(['ACTIVE','DELINQUENT','SUSPENDED','INACTIVE']).optional(),
+        notes:     z.string().optional().nullable(),
+      }).parse(req.body);
+
+      // Phone uniqueness check (only if changing phone)
+      if (body.phone) {
+        const existing = await prisma.student.findFirst({
+          where: { phone: body.phone, id: { not: req.params.id } },
+        });
+        if (existing) {
+          respond.error(res, { message: 'Ya existe otro alumno con ese teléfono', code: 'DUPLICATE_PHONE' }, 409);
+          return;
+        }
+      }
+
+      const student = await prisma.student.update({
+        where: { id: req.params.id },
+        data: {
+          ...(body.name      !== undefined && { name: body.name }),
+          ...(body.phone     !== undefined && { phone: body.phone }),
+          ...(body.modality  !== undefined && { modality: body.modality }),
+          ...(body.tutorName !== undefined && { tutorName: body.tutorName }),
+          ...(body.teacherId !== undefined && { teacherId: body.teacherId }),
+          ...(body.status    !== undefined && { status: body.status, conversationState: body.status as never }),
+          ...(body.notes     !== undefined && { notes: body.notes }),
+        },
+        include: {
+          payments:      { orderBy: { createdAt: 'desc' }, take: 5 },
+          teacher:       { include: { user: { select: { name: true } } } },
+          scheduleSlots: { where: { isActive: true }, include: { schedule: { include: { modality: true } } } },
+        },
+      });
+
+      // Sync bot session phone if phone changed
+      if (body.phone) {
+        await prisma.botSession.upsert({
+          where:  { phone: body.phone },
+          update: {},
+          create: { phone: body.phone, state: student.conversationState, data: {} },
+        });
+      }
+
+      respond.ok(res, { data: student, message: 'Alumno actualizado correctamente' });
+    } catch (err) { next(err); }
+  }
+);
 
 // ─── ACTIVATE ─────────────────────────────────
 router.post('/:id/activate', requireAdmin, audit('STUDENT_ACTIVATED', 'Student'),
