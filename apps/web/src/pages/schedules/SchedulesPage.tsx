@@ -7,8 +7,9 @@ export default function SchedulesPage() {
 
   if (isLoading) return <PageSpinner />;
 
-  const grouped: Record<number, typeof schedules> = {};
-  schedules?.forEach(s => {
+  // Group by day
+  const grouped: Record<number, NonNullable<typeof schedules>> = {};
+  (schedules ?? []).forEach(s => {
     if (!grouped[s.dayOfWeek]) grouped[s.dayOfWeek] = [];
     grouped[s.dayOfWeek]!.push(s);
   });
@@ -24,23 +25,51 @@ export default function SchedulesPage() {
               {DAY_LABEL[Number(day)]}
             </h2>
             <div style={{ display: 'grid', gridTemplateColumns: 'repeat(auto-fill, minmax(260px, 1fr))', gap: 12 }}>
-              {slots?.map(s => {
-                const pct = Math.round((s.slots.length / s.modality.maxCapacity) * 100);
+              {slots.map(s => {
+                const enrolled = s.slots?.length ?? 0;
+
+                // Capacity: prefer explicit capacity field, fallback to modality maxCapacity
+                const totalCap = (s as { capacity?: number }).capacity
+                  ?? (s as { modality?: { maxCapacity: number } }).modality?.maxCapacity
+                  ?? 1;
+
+                const pct = Math.round((enrolled / totalCap) * 100);
+
+                // Modality label: support multi-modality (new) and single (legacy)
+                const multiMods = (s as { modalities?: { modality: { name: string; modality: string } }[] }).modalities;
+                const singleMod = (s as { modality?: { name: string; modality: string } }).modality;
+
+                const modalityLabel = multiMods && multiMods.length > 0
+                  ? multiMods.map(m => MODALITY_LABEL[m.modality.modality] ?? m.modality.name).join(', ')
+                  : singleMod
+                  ? (MODALITY_LABEL[singleMod.modality] ?? singleMod.name)
+                  : '—';
+
+                const waitingCount = (s as { waitingList?: unknown[] }).waitingList?.length ?? 0;
+
                 return (
                   <Card key={s.id}>
                     <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'flex-start', marginBottom: 10 }}>
                       <div>
-                        <p style={{ fontWeight: 600, fontSize: 15, color: 'var(--text-primary)' }}>{s.startTime} – {s.endTime}</p>
-                        <p style={{ fontSize: 12, color: 'var(--text-muted)', marginTop: 2 }}>{MODALITY_LABEL[s.modality.modality] ?? s.modality.name}</p>
+                        <p style={{ fontWeight: 600, fontSize: 15, color: 'var(--text-primary)' }}>
+                          {s.startTime} – {s.endTime}
+                        </p>
+                        <p style={{ fontSize: 12, color: 'var(--text-muted)', marginTop: 2 }}>
+                          {modalityLabel}
+                        </p>
                       </div>
-                      <Badge variant={pct >= 90 ? 'danger' : pct >= 70 ? 'warning' : 'success'}>{pct}%</Badge>
+                      <Badge variant={pct >= 90 ? 'danger' : pct >= 70 ? 'warning' : 'success'}>
+                        {pct}%
+                      </Badge>
                     </div>
                     <div style={{ height: 4, background: 'var(--border)', borderRadius: 99, marginBottom: 8 }}>
-                      <div style={{ height: '100%', width: `${pct}%`, background: occupancyColor(pct), borderRadius: 99 }} />
+                      <div style={{ height: '100%', width: `${Math.min(pct, 100)}%`, background: occupancyColor(pct), borderRadius: 99 }} />
                     </div>
                     <p style={{ fontSize: 12, color: 'var(--text-muted)' }}>
-                      {s.slots.length} / {s.modality.maxCapacity} alumnos
-                      {s.waitingList.length > 0 && <span style={{ color: 'var(--warning)', marginLeft: 6 }}>· {s.waitingList.length} en espera</span>}
+                      {enrolled} / {totalCap} alumnos
+                      {waitingCount > 0 && (
+                        <span style={{ color: 'var(--warning)', marginLeft: 6 }}>· {waitingCount} en espera</span>
+                      )}
                     </p>
                   </Card>
                 );

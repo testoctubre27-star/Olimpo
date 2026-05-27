@@ -1,30 +1,40 @@
 import { useState } from 'react';
+import { GraduationCap, Plus, Edit2, Power } from 'lucide-react';
 import { useQuery, useMutation, useQueryClient } from '@tanstack/react-query';
-import { GraduationCap, Plus, Edit2, Users, Calendar, ToggleLeft, ToggleRight } from 'lucide-react';
 import { api } from '../../services/api';
-import { DataTable } from '../../components/ui/DataTable';
-import { SectionHeader, Badge, Button, Card, Input } from '../../components/ui';
+import { SectionHeader, Badge, Button, Input } from '../../components/ui';
 import { Modal } from '../../components/ui/Modal';
+import { DataTable } from '../../components/ui/DataTable';
 import { toast } from '../../components/ui/Toast';
-import { formatPhone, DAY_LABEL, MODALITY_LABEL } from '../../utils/labels';
+import { formatPhone, DAY_LABEL } from '../../utils/labels';
 
 // ─── Types ────────────────────────────────────
+interface ScheduleModality {
+  id: string;
+  modality: { name: string; modality: string };
+}
+
+interface TeacherSchedule {
+  id: string;
+  dayOfWeek: number;
+  startTime: string;
+  endTime: string;
+  capacity: number;
+  isActive: boolean;
+  modalities?: ScheduleModality[];
+  // legacy
+  modality?: { name: string };
+  slots: { id: string }[];
+}
+
 interface Teacher {
   id: string;
   displayName: string;
   phone: string;
-  commissionPct: string;
+  commissionPct: number;
   user: { name: string; email: string; isActive: boolean };
   students: { id: string }[];
-  schedules: {
-    id: string;
-    dayOfWeek: number;
-    startTime: string;
-    endTime: string;
-    capacity: number;
-    modality: { name: string; modality: string };
-    slots: { id: string }[];
-  }[];
+  schedules: TeacherSchedule[];
 }
 
 // ─── Hooks ────────────────────────────────────
@@ -41,13 +51,7 @@ function useTeachers() {
 function useCreateTeacher() {
   const qc = useQueryClient();
   return useMutation({
-    mutationFn: async (payload: {
-      name: string; email: string; password: string;
-      phone: string; commissionPct: number;
-    }) => {
-      const { data } = await api.post('/teachers', payload);
-      return data;
-    },
+    mutationFn: async (p: object) => (await api.post('/teachers', p)).data,
     onSuccess: () => qc.invalidateQueries({ queryKey: ['teachers'] }),
   });
 }
@@ -55,19 +59,11 @@ function useCreateTeacher() {
 function useUpdateTeacher() {
   const qc = useQueryClient();
   return useMutation({
-    mutationFn: async ({ id, ...payload }: {
-      id: string; name?: string; phone?: string;
-      commissionPct?: number; isActive?: boolean;
-    }) => {
-      const { data } = await api.patch(`/teachers/${id}`, payload);
-      return data;
-    },
+    mutationFn: async ({ id, ...p }: { id: string } & Record<string, unknown>) =>
+      (await api.patch(`/teachers/${id}`, p)).data,
     onSuccess: () => qc.invalidateQueries({ queryKey: ['teachers'] }),
   });
 }
-
-// ─── Empty form state ─────────────────────────
-const emptyForm = { name: '', email: '', password: '', phone: '', commissionPct: '40' };
 
 // ─── Page ─────────────────────────────────────
 export default function TeachersPage() {
@@ -75,68 +71,62 @@ export default function TeachersPage() {
   const createMutation = useCreateTeacher();
   const updateMutation = useUpdateTeacher();
 
-  const [showCreate, setShowCreate]     = useState(false);
-  const [selected, setSelected]         = useState<Teacher | null>(null);
-  const [form, setForm]                 = useState(emptyForm);
-  const [editForm, setEditForm]         = useState({ name: '', phone: '', commissionPct: '' });
-  const [errors, setErrors]             = useState<Record<string, string>>({});
+  const [showCreate, setShowCreate] = useState(false);
+  const [editTarget, setEditTarget] = useState<Teacher | null>(null);
 
-  const validate = () => {
-    const e: Record<string, string> = {};
-    if (!form.name.trim())              e.name     = 'El nombre es requerido';
-    if (!form.email.trim())             e.email    = 'El email es requerido';
-    else if (!/\S+@\S+\.\S+/.test(form.email)) e.email = 'Email inválido';
-    if (form.password.length < 6)       e.password = 'Mínimo 6 caracteres';
-    if (form.phone.replace(/\D/g,'').length < 10) e.phone = 'Teléfono de 10 dígitos';
-    setErrors(e);
-    return Object.keys(e).length === 0;
-  };
+  const [form, setForm] = useState({
+    name: '', email: '', password: '', phone: '', commissionPct: '40',
+  });
+  const [editForm, setEditForm] = useState({
+    name: '', phone: '', commissionPct: '',
+  });
+
+  const errMsg = (err: unknown) =>
+    (err as { response?: { data?: { message?: string } } })?.response?.data?.message;
+
+  const fi  = (k: string) => (e: React.ChangeEvent<HTMLInputElement>) => setForm(f => ({ ...f, [k]: e.target.value }));
+  const efi = (k: string) => (e: React.ChangeEvent<HTMLInputElement>) => setEditForm(f => ({ ...f, [k]: e.target.value }));
 
   const handleCreate = async () => {
-    if (!validate()) return;
-    try {
-      await createMutation.mutateAsync({
-        name:          form.name.trim(),
-        email:         form.email.trim().toLowerCase(),
-        password:      form.password,
-        phone:         form.phone.replace(/\D/g, ''),
-        commissionPct: Number(form.commissionPct) || 40,
-      });
-      toast.success(`Maestro ${form.name} creado correctamente`);
-      setShowCreate(false);
-      setForm(emptyForm);
-      setErrors({});
-    } catch (err: unknown) {
-      const msg = (err as { response?: { data?: { message?: string } } })?.response?.data?.message;
-      toast.error(msg ?? 'Error al crear maestro');
+    if (!form.name || !form.email || !form.password || !form.phone) {
+      toast.error('Todos los campos son requeridos'); return;
     }
+    try {
+      await createMutation.mutateAsync({ ...form, commissionPct: Number(form.commissionPct) });
+      toast.success('Maestro creado correctamente');
+      setShowCreate(false);
+      setForm({ name: '', email: '', password: '', phone: '', commissionPct: '40' });
+    } catch (err) { toast.error(errMsg(err) ?? 'Error al crear maestro'); }
   };
 
-  const handleUpdate = async () => {
-    if (!selected) return;
+  const handleEdit = async () => {
+    if (!editTarget) return;
     try {
       await updateMutation.mutateAsync({
-        id:            selected.id,
-        name:          editForm.name || undefined,
-        phone:         editForm.phone || undefined,
-        commissionPct: editForm.commissionPct ? Number(editForm.commissionPct) : undefined,
+        id: editTarget.id,
+        name: editForm.name.trim(),
+        phone: editForm.phone.trim(),
+        commissionPct: Number(editForm.commissionPct),
       });
       toast.success('Maestro actualizado');
-      setSelected(null);
-    } catch (err: unknown) {
-      const msg = (err as { response?: { data?: { message?: string } } })?.response?.data?.message;
-      toast.error(msg ?? 'Error al actualizar');
-    }
+      setEditTarget(null);
+    } catch (err) { toast.error(errMsg(err) ?? 'Error al actualizar'); }
   };
 
-  const handleToggleActive = async (teacher: Teacher) => {
-    const action = teacher.user.isActive ? 'desactivar' : 'activar';
+  const handleToggle = async (t: Teacher) => {
     try {
-      await updateMutation.mutateAsync({ id: teacher.id, isActive: !teacher.user.isActive });
-      toast.success(`Maestro ${action === 'activar' ? 'activado' : 'desactivado'}`);
-    } catch {
-      toast.error(`Error al ${action} maestro`);
+      await updateMutation.mutateAsync({ id: t.id, isActive: !t.user.isActive });
+      toast.success(t.user.isActive ? 'Maestro desactivado' : 'Maestro activado');
+    } catch { toast.error('Error al cambiar estado'); }
+  };
+
+  // Helper: get schedule modality name safely
+  const getModalityName = (s: TeacherSchedule) => {
+    if (s.modalities && s.modalities.length > 0) {
+      return s.modalities.map(m => m.modality.name).join(', ');
     }
+    if (s.modality) return s.modality.name;
+    return '—';
   };
 
   const columns = [
@@ -144,11 +134,11 @@ export default function TeachersPage() {
       key: 'name', header: 'Maestro',
       render: (row: Teacher) => (
         <div style={{ display: 'flex', alignItems: 'center', gap: 10 }}>
-          <div style={{ width: 36, height: 36, borderRadius: '50%', background: row.user.isActive ? 'var(--primary-light)' : 'var(--border)', display: 'flex', alignItems: 'center', justifyContent: 'center', flexShrink: 0 }}>
-            <GraduationCap size={16} color={row.user.isActive ? 'var(--primary)' : 'var(--text-muted)'} />
+          <div style={{ width: 34, height: 34, borderRadius: '50%', background: 'var(--primary-light)', display: 'flex', alignItems: 'center', justifyContent: 'center', flexShrink: 0 }}>
+            <GraduationCap size={15} color="var(--primary)" />
           </div>
           <div>
-            <p style={{ fontWeight: 500, fontSize: 14, color: 'var(--text-primary)' }}>{row.user.name}</p>
+            <p style={{ fontSize: 14, fontWeight: 500, color: 'var(--text-primary)' }}>{row.user.name}</p>
             <p style={{ fontSize: 12, color: 'var(--text-muted)' }}>{row.user.email}</p>
           </div>
         </div>
@@ -156,28 +146,41 @@ export default function TeachersPage() {
     },
     {
       key: 'phone', header: 'Teléfono', width: 140,
-      render: (row: Teacher) => <span style={{ fontSize: 13, color: 'var(--text-secondary)' }}>{formatPhone(row.phone)}</span>,
+      render: (row: Teacher) => (
+        <span style={{ fontSize: 13, color: 'var(--text-secondary)' }}>{formatPhone(row.phone)}</span>
+      ),
+    },
+    {
+      key: 'schedules', header: 'Horarios', width: 180,
+      render: (row: Teacher) => {
+        const active = row.schedules?.filter(s => s.isActive) ?? [];
+        if (active.length === 0) return <span style={{ fontSize: 12, color: 'var(--text-muted)' }}>Sin horarios</span>;
+        return (
+          <div style={{ display: 'flex', flexDirection: 'column', gap: 2 }}>
+            {active.slice(0, 3).map(s => (
+              <span key={s.id} style={{ fontSize: 12, color: 'var(--text-secondary)' }}>
+                {DAY_LABEL[s.dayOfWeek]} {s.startTime} · {getModalityName(s)}
+              </span>
+            ))}
+            {active.length > 3 && (
+              <span style={{ fontSize: 11, color: 'var(--text-muted)' }}>+{active.length - 3} más</span>
+            )}
+          </div>
+        );
+      },
     },
     {
       key: 'students', header: 'Alumnos', width: 90, align: 'center' as const,
-      render: (row: Teacher) => (
-        <Badge variant="info">{row.students.length}</Badge>
-      ),
-    },
-    {
-      key: 'schedules', header: 'Horarios', width: 90, align: 'center' as const,
-      render: (row: Teacher) => (
-        <Badge variant="default">{row.schedules.length}</Badge>
-      ),
+      render: (row: Teacher) => <Badge variant="info">{row.students?.length ?? 0}</Badge>,
     },
     {
       key: 'commission', header: 'Comisión', width: 100, align: 'right' as const,
       render: (row: Teacher) => (
-        <span style={{ fontSize: 13, fontWeight: 600, color: 'var(--text-primary)' }}>{row.commissionPct}%</span>
+        <span style={{ fontSize: 13, fontWeight: 500, color: 'var(--text-primary)' }}>{row.commissionPct}%</span>
       ),
     },
     {
-      key: 'status', header: 'Estado', width: 110,
+      key: 'status', header: 'Estado', width: 100,
       render: (row: Teacher) => (
         <Badge variant={row.user.isActive ? 'success' : 'default'} dot>
           {row.user.isActive ? 'Activo' : 'Inactivo'}
@@ -185,22 +188,20 @@ export default function TeachersPage() {
       ),
     },
     {
-      key: 'actions', header: '', width: 100,
+      key: 'actions', header: '', width: 80,
       render: (row: Teacher) => (
         <div style={{ display: 'flex', gap: 4 }}>
           <button
-            onClick={e => { e.stopPropagation(); setSelected(row); setEditForm({ name: row.user.name, phone: row.phone, commissionPct: String(row.commissionPct) }); }}
-            style={{ background: 'none', border: 'none', cursor: 'pointer', color: 'var(--text-muted)', padding: 6, borderRadius: 6, display: 'flex' }}
-            title="Editar"
-          >
+            onClick={e => { e.stopPropagation(); setEditTarget(row); setEditForm({ name: row.user.name, phone: row.phone, commissionPct: String(row.commissionPct) }); }}
+            style={{ background: 'none', border: 'none', cursor: 'pointer', color: 'var(--text-muted)', padding: 5, borderRadius: 6, display: 'flex' }}
+            title="Editar">
             <Edit2 size={14} />
           </button>
           <button
-            onClick={e => { e.stopPropagation(); handleToggleActive(row); }}
-            style={{ background: 'none', border: 'none', cursor: 'pointer', color: row.user.isActive ? 'var(--warning)' : 'var(--success)', padding: 6, borderRadius: 6, display: 'flex' }}
-            title={row.user.isActive ? 'Desactivar' : 'Activar'}
-          >
-            {row.user.isActive ? <ToggleRight size={16} /> : <ToggleLeft size={16} />}
+            onClick={e => { e.stopPropagation(); handleToggle(row); }}
+            style={{ background: 'none', border: 'none', cursor: 'pointer', color: row.user.isActive ? 'var(--warning)' : 'var(--success)', padding: 5, borderRadius: 6, display: 'flex' }}
+            title={row.user.isActive ? 'Desactivar' : 'Activar'}>
+            <Power size={14} />
           </button>
         </div>
       ),
@@ -224,146 +225,57 @@ export default function TeachersPage() {
         data={teachers ?? []}
         loading={isLoading}
         rowKey={r => r.id}
-        emptyMessage="No hay maestros registrados. Crea el primero."
+        emptyMessage="No hay maestros registrados"
       />
 
-      {/* ── Modal: Create teacher ── */}
-      <Modal
-        open={showCreate}
-        onClose={() => { setShowCreate(false); setForm(emptyForm); setErrors({}); }}
-        title="Nuevo maestro"
-        size="md"
-        footer={
-          <>
-            <Button variant="secondary" onClick={() => { setShowCreate(false); setForm(emptyForm); setErrors({}); }}>
-              Cancelar
-            </Button>
-            <Button loading={createMutation.isPending} onClick={handleCreate} icon={<Plus size={14} />}>
-              Crear maestro
-            </Button>
-          </>
-        }
-      >
-        <div style={{ display: 'flex', flexDirection: 'column', gap: 16 }}>
-          <Input
-            label="Nombre completo *"
-            placeholder="Ej: María García López"
-            value={form.name}
-            error={errors.name}
-            onChange={e => { setForm(f => ({ ...f, name: e.target.value })); setErrors(er => ({ ...er, name: '' })); }}
-          />
-          <Input
-            label="Email *"
-            type="email"
-            placeholder="maestro@olimpo.mx"
-            value={form.email}
-            error={errors.email}
-            onChange={e => { setForm(f => ({ ...f, email: e.target.value })); setErrors(er => ({ ...er, email: '' })); }}
-          />
-          <Input
-            label="Contraseña *"
-            type="password"
-            placeholder="Mínimo 6 caracteres"
-            value={form.password}
-            error={errors.password}
-            onChange={e => { setForm(f => ({ ...f, password: e.target.value })); setErrors(er => ({ ...er, password: '' })); }}
-          />
-          <Input
-            label="Teléfono *"
-            placeholder="5512345678"
-            value={form.phone}
-            error={errors.phone}
-            onChange={e => { setForm(f => ({ ...f, phone: e.target.value })); setErrors(er => ({ ...er, phone: '' })); }}
-          />
+      {/* ── Create modal ── */}
+      <Modal open={showCreate} onClose={() => setShowCreate(false)} title="Nuevo maestro" size="md"
+        footer={<>
+          <Button variant="secondary" onClick={() => setShowCreate(false)}>Cancelar</Button>
+          <Button loading={createMutation.isPending} onClick={handleCreate} icon={<Plus size={14} />}>
+            Crear maestro
+          </Button>
+        </>}>
+        <div style={{ display: 'flex', flexDirection: 'column', gap: 14 }}>
+          <div style={{ display: 'grid', gridTemplateColumns: '1fr 1fr', gap: 12 }}>
+            <Input label="Nombre completo *" value={form.name} onChange={fi('name')} placeholder="Juan García" />
+            <Input label="Teléfono *" value={form.phone} onChange={fi('phone')} placeholder="7821234567" />
+          </div>
+          <Input label="Email *" type="email" value={form.email} onChange={fi('email')} placeholder="maestro@olimpo.mx" />
+          <Input label="Contraseña *" type="password" value={form.password} onChange={fi('password')} placeholder="Mínimo 6 caracteres" />
           <div>
             <label style={{ fontSize: 13, fontWeight: 500, color: 'var(--text-secondary)', marginBottom: 6, display: 'block' }}>
               Porcentaje de comisión
             </label>
-            <input
-              type="number" min={0} max={100}
-              value={form.commissionPct}
-              onChange={e => setForm(f => ({ ...f, commissionPct: e.target.value }))}
-              style={{ width: '100%', height: 38, padding: '0 12px', fontSize: 14, border: '1px solid var(--border)', borderRadius: 'var(--radius-md)', fontFamily: 'var(--font-sans)', color: 'var(--text-primary)', background: 'var(--surface)', outline: 'none' }}
-            />
+            <input type="number" min={0} max={100} value={form.commissionPct} onChange={fi('commissionPct')}
+              style={{ width: '100%', height: 38, padding: '0 12px', fontSize: 14, border: '1px solid var(--border)', borderRadius: 'var(--radius-md)', fontFamily: 'var(--font-sans)', color: 'var(--text-primary)', background: 'var(--surface)', outline: 'none' }} />
             <p style={{ fontSize: 12, color: 'var(--text-muted)', marginTop: 4 }}>
               Porcentaje del pago de los alumnos que corresponde al maestro
             </p>
           </div>
-
           <div style={{ padding: '10px 14px', background: 'var(--info-bg)', borderRadius: 'var(--radius-md)', fontSize: 13, color: 'var(--info)' }}>
             El maestro recibirá acceso al portal con este email y contraseña. Compártelos de forma segura.
           </div>
         </div>
       </Modal>
 
-      {/* ── Modal: Edit teacher ── */}
-      <Modal
-        open={!!selected}
-        onClose={() => setSelected(null)}
-        title="Editar maestro"
-        size="lg"
-        footer={
-          <>
-            <Button variant="secondary" onClick={() => setSelected(null)}>Cancelar</Button>
-            <Button loading={updateMutation.isPending} onClick={handleUpdate}>
-              Guardar cambios
-            </Button>
-          </>
-        }
-      >
-        {selected && (
-          <div style={{ display: 'flex', flexDirection: 'column', gap: 20 }}>
-            {/* Edit fields */}
-            <div style={{ display: 'flex', flexDirection: 'column', gap: 14 }}>
-              <Input
-                label="Nombre"
-                value={editForm.name}
-                onChange={e => setEditForm(f => ({ ...f, name: e.target.value }))}
-              />
-              <Input
-                label="Teléfono"
-                value={editForm.phone}
-                onChange={e => setEditForm(f => ({ ...f, phone: e.target.value }))}
-              />
-              <div>
-                <label style={{ fontSize: 13, fontWeight: 500, color: 'var(--text-secondary)', marginBottom: 6, display: 'block' }}>
-                  Comisión (%)
-                </label>
-                <input
-                  type="number" min={0} max={100}
-                  value={editForm.commissionPct}
-                  onChange={e => setEditForm(f => ({ ...f, commissionPct: e.target.value }))}
-                  style={{ width: '100%', height: 38, padding: '0 12px', fontSize: 14, border: '1px solid var(--border)', borderRadius: 'var(--radius-md)', fontFamily: 'var(--font-sans)', color: 'var(--text-primary)', background: 'var(--surface)', outline: 'none' }}
-                />
-              </div>
-            </div>
-
-            {/* Schedules summary */}
-            {selected.schedules.length > 0 && (
-              <div>
-                <p style={{ fontSize: 13, fontWeight: 600, color: 'var(--text-secondary)', marginBottom: 10, display: 'flex', alignItems: 'center', gap: 6 }}>
-                  <Calendar size={14} /> Horarios activos
-                </p>
-                <div style={{ display: 'flex', flexDirection: 'column', gap: 6 }}>
-                  {selected.schedules.map(s => (
-                    <div key={s.id} style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', padding: '8px 12px', background: 'var(--bg)', borderRadius: 'var(--radius-md)', fontSize: 13 }}>
-                      <span style={{ color: 'var(--text-primary)', fontWeight: 500 }}>
-                        {DAY_LABEL[s.dayOfWeek]} {s.startTime}–{s.endTime}
-                      </span>
-                      <span style={{ color: 'var(--text-muted)' }}>
-                        {MODALITY_LABEL[s.modality.modality] ?? s.modality.name}
-                      </span>
-                      <div style={{ display: 'flex', alignItems: 'center', gap: 4 }}>
-                        <Users size={12} color="var(--text-muted)" />
-                        <span style={{ color: 'var(--text-muted)' }}>{s.slots.length}/{s.capacity}</span>
-                      </div>
-                    </div>
-                  ))}
-                </div>
-              </div>
-            )}
+      {/* ── Edit modal ── */}
+      <Modal open={!!editTarget} onClose={() => setEditTarget(null)} title={`Editar — ${editTarget?.user.name}`} size="sm"
+        footer={<>
+          <Button variant="secondary" onClick={() => setEditTarget(null)}>Cancelar</Button>
+          <Button loading={updateMutation.isPending} onClick={handleEdit}>Guardar cambios</Button>
+        </>}>
+        <div style={{ display: 'flex', flexDirection: 'column', gap: 14 }}>
+          <Input label="Nombre completo" value={editForm.name} onChange={efi('name')} />
+          <Input label="Teléfono" value={editForm.phone} onChange={efi('phone')} />
+          <div>
+            <label style={{ fontSize: 13, fontWeight: 500, color: 'var(--text-secondary)', marginBottom: 6, display: 'block' }}>
+              Porcentaje de comisión
+            </label>
+            <input type="number" min={0} max={100} value={editForm.commissionPct} onChange={efi('commissionPct')}
+              style={{ width: '100%', height: 38, padding: '0 12px', fontSize: 14, border: '1px solid var(--border)', borderRadius: 'var(--radius-md)', fontFamily: 'var(--font-sans)', color: 'var(--text-primary)', background: 'var(--surface)', outline: 'none' }} />
           </div>
-        )}
+        </div>
       </Modal>
     </div>
   );
