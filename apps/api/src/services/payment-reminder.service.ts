@@ -2,17 +2,12 @@ import { prisma } from '../config/database';
 import { WhatsAppAdapter } from '../adapters/whatsapp.adapter';
 import { logger } from '../config/logger';
 
-/**
- * Send payment reminders based on each student's individual paymentDay.
- * Window: 5 days before and 5 days after their payment date.
- * Only applies to ACTIVE students with regular classes.
- */
 export async function runPaymentReminders(): Promise<void> {
   const today      = new Date();
   const dayOfMonth = today.getDate();
   const monthYear  = `${today.getFullYear()}-${String(today.getMonth() + 1).padStart(2, '0')}`;
 
-  logger.info(`[Reminder] Running for day ${dayOfMonth}, period ${monthYear}`);
+  logger.info(`[Reminder] day=${dayOfMonth} period=${monthYear}`);
 
   const students = await prisma.student.findMany({
     where: {
@@ -31,19 +26,17 @@ export async function runPaymentReminders(): Promise<void> {
   let sent = 0, skipped = 0;
 
   for (const student of students) {
-    // Already paid this month
     if (student.payments.length > 0) { skipped++; continue; }
 
     const payDay = student.paymentDay!;
-    const diff   = dayOfMonth - payDay; // negative = before due, positive = after
+    const diff   = dayOfMonth - payDay;
 
-    // Only within [-5, +5] window
     if (diff < -5 || diff > 5) continue;
 
-    // Idempotency — don't send twice on same day
-    const logKey = `reminder-${student.id}-${monthYear}-${dayOfMonth}`;
+    // Idempotency key stored as jobName
+    const jobName = `reminder-${student.id}-${monthYear}-day${dayOfMonth}`;
     const alreadySent = await prisma.automationLog.findFirst({
-      where: { key: logKey, status: 'SUCCESS' },
+      where: { jobName, status: 'SUCCESS' },
     });
     if (alreadySent) continue;
 
@@ -80,16 +73,27 @@ export async function runPaymentReminders(): Promise<void> {
     }
 
     try {
-      await WhatsAppAdapter.send({ to: student.phone, body: msg, studentId: student.id, type: 'PAYMENT_REMINDER' });
+      await WhatsAppAdapter.send({
+        to: student.phone, body: msg,
+        studentId: student.id, type: 'PAYMENT_REMINDER',
+      });
       await prisma.automationLog.create({
-        data: { key: logKey, status: 'SUCCESS', meta: { payDay, diff, monthYear } as unknown as import('@prisma/client').Prisma.InputJsonValue },
+        data: {
+          jobName,
+          status:  'SUCCESS',
+          details: { payDay, diff, monthYear, student: student.name } as object,
+        },
       });
       sent++;
-      logger.info(`[Reminder] ✅ ${student.name} (payDay:${payDay} diff:${diff})`);
+      logger.info(`[Reminder] ✅ ${student.name} payDay:${payDay} diff:${diff}`);
     } catch (err) {
       logger.error(`[Reminder] ❌ ${student.name}`, { err });
       await prisma.automationLog.create({
-        data: { key: logKey, status: 'FAILED', meta: { error: String(err) } as unknown as import('@prisma/client').Prisma.InputJsonValue },
+        data: {
+          jobName,
+          status: 'FAILED',
+          error:  err instanceof Error ? err.message : String(err),
+        },
       });
     }
 
