@@ -18,6 +18,7 @@ interface Student {
   conversationState: string;
   tutorName?: string;
   notes?: string;
+  paymentDay?: number;
   enrolledAt?: string;
   createdAt: string;
   teacher?: { id: string; user: { name: string } };
@@ -114,7 +115,7 @@ export default function StudentDetailPage() {
   // Edit form state
   const [form, setForm] = useState({
     name: '', phone: '', modality: '', teacherId: '',
-    tutorName: '', notes: '', status: '',
+    tutorName: '', notes: '', status: '', paymentDay: '',
   });
 
   const [payForm, setPayForm] = useState({
@@ -134,6 +135,7 @@ export default function StudentDetailPage() {
       tutorName: student.tutorName ?? '',
       notes:     student.notes ?? '',
       status:    student.status,
+      paymentDay: student.paymentDay ? String(student.paymentDay) : '',
     });
     setEditing(true);
   };
@@ -148,6 +150,7 @@ export default function StudentDetailPage() {
         teacherId: form.teacherId || null,
         tutorName: form.tutorName.trim() || null,
         notes:     form.notes.trim() || null,
+        paymentDay: form.paymentDay ? Number(form.paymentDay) : null,
         status:    form.status,
       });
       toast.success('Alumno actualizado');
@@ -257,6 +260,7 @@ export default function StudentDetailPage() {
                   ['Estado', STATUS_LABEL[student.status] ?? student.status],
                   ['Tutor / Padre', student.tutorName || '—'],
                   ['Maestro', student.teacher?.user.name || '—'],
+                  ['Día de pago', student.paymentDay ? `Día ${student.paymentDay} de cada mes` : 'No definido'],
                   ['Inscrito el', student.enrolledAt ? formatDate(student.enrolledAt) : formatDate(student.createdAt)],
                   ['Horario', schedule ? `${DAY_LABEL[schedule.dayOfWeek]} ${schedule.startTime}–${schedule.endTime}` : '—'],
                 ].map(([label, value]) => (

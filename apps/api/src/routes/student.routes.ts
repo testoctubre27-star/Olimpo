@@ -176,13 +176,14 @@ router.patch('/:id', requireAdmin, audit('STUDENT_UPDATED', 'Student'),
   async (req: Request, res: Response, next: NextFunction): Promise<void> => {
     try {
       const body = z.object({
-        name:      z.string().min(2).optional(),
-        phone:     z.string().min(8).optional(),
-        modality:  z.enum(['BABY_PHASE1','BABY_PHASE2','BABY_PHASE3','GROUP_CHILD','GROUP_ADULT','FREE_ACCESS','AQUA_THERAPY','PERSONAL_CHILD']).optional(),
-        tutorName: z.string().optional().nullable(),
-        teacherId: z.string().optional().nullable(),
-        status:    z.enum(['ACTIVE','DELINQUENT','SUSPENDED','INACTIVE']).optional(),
-        notes:     z.string().optional().nullable(),
+        name:       z.string().min(2).optional(),
+        phone:      z.string().min(8).optional(),
+        modality:   z.enum(['BABY_PHASE1','BABY_PHASE2','BABY_PHASE3','GROUP_CHILD','GROUP_ADULT','FREE_ACCESS','AQUA_THERAPY','PERSONAL_CHILD']).optional(),
+        tutorName:  z.string().optional().nullable(),
+        teacherId:  z.string().optional().nullable(),
+        status:     z.enum(['ACTIVE','DELINQUENT','SUSPENDED','INACTIVE']).optional(),
+        notes:      z.string().optional().nullable(),
+        paymentDay: z.number().int().min(1).max(28).optional().nullable(),
       }).parse(req.body);
 
       // Phone uniqueness check (only if changing phone)
@@ -205,7 +206,8 @@ router.patch('/:id', requireAdmin, audit('STUDENT_UPDATED', 'Student'),
           ...(body.tutorName !== undefined && { tutorName: body.tutorName }),
           ...(body.teacherId !== undefined && { teacherId: body.teacherId }),
           ...(body.status    !== undefined && { status: body.status, conversationState: body.status as never }),
-          ...(body.notes     !== undefined && { notes: body.notes }),
+          ...(body.notes      !== undefined && { notes: body.notes }),
+          ...(body.paymentDay !== undefined && { paymentDay: body.paymentDay }),
         },
         include: {
           payments:      { orderBy: { createdAt: 'desc' }, take: 5 },

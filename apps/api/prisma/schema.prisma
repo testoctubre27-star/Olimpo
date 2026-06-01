@@ -234,7 +234,7 @@ model Student {
   updatedAt           DateTime        @updatedAt
   tutorName    String?   // Name of parent/guardian for minors
   enrolledAt   DateTime? // Date of manual enrollment by admin
-
+  paymentDay   Int?      // Day of month (1-28) when student pays
   teacher             Teacher?                 @relation(fields: [teacherId], references: [id])
   scheduleSlots       ScheduleSlot[]
   payments            Payment[]
