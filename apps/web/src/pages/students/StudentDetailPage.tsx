@@ -242,6 +242,30 @@ export default function StudentDetailPage() {
                     onChange={fi('teacherId')}
                   />
                 </div>
+                <div style={{ display: 'grid', gridTemplateColumns: '1fr 1fr', gap: 12 }}>
+                  <div>
+                    <label style={{ fontSize: 13, fontWeight: 500, color: 'var(--text-secondary)', marginBottom: 6, display: 'block' }}>
+                      Día de pago <span style={{ color: 'var(--text-muted)', fontWeight: 400 }}>(1-28)</span>
+                    </label>
+                    <input
+                      type="number" min={1} max={28}
+                      placeholder="Ej: 15"
+                      value={form.paymentDay}
+                      onChange={e => setForm(f => ({ ...f, paymentDay: e.target.value }))}
+                      style={{ width: '100%', height: 38, padding: '0 12px', fontSize: 14, border: '1px solid var(--border)', borderRadius: 'var(--radius-md)', fontFamily: 'var(--font-sans)', color: 'var(--text-primary)', background: 'var(--surface)', outline: 'none' }}
+                    />
+                    <p style={{ fontSize: 11, color: 'var(--text-muted)', marginTop: 3 }}>
+                      Día del mes en que el alumno realiza su pago mensual
+                    </p>
+                  </div>
+                  <div style={{ display: 'flex', alignItems: 'flex-end', paddingBottom: 22 }}>
+                    {form.paymentDay && (
+                      <div style={{ padding: '8px 12px', background: 'var(--success-bg)', borderRadius: 'var(--radius-md)', fontSize: 13, color: 'var(--success)' }}>
+                        ✓ Recordatorio ±5 días del día {form.paymentDay}
+                      </div>
+                    )}
+                  </div>
+                </div>
                 <div>
                   <label style={{ fontSize: 13, fontWeight: 500, color: 'var(--text-secondary)', marginBottom: 6, display: 'block' }}>Notas internas</label>
                   <textarea
