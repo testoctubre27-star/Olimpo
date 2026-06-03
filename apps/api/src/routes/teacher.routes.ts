@@ -59,7 +59,7 @@ router.post('/', requireAdmin, async (req: Request, res: Response, next: NextFun
 
     const hashed = await bcrypt.hash(body.password, 12);
     const user = await prisma.user.create({
-      data: { name: body.name, email: body.email, password: hashed, role: 'TEACHER', phone: body.phone },
+      data: { name: body.name, email: body.email, password: hashed, role: 'TEACHER', phone: body.phone, isActive: true },
     });
     const teacher = await prisma.teacher.create({
       data: { userId: user.id, displayName: body.name, phone: body.phone, commissionPct: body.commissionPct },
