@@ -106,7 +106,14 @@ router.get('/my-students', requireTeacher, async (req: Request, res: Response, n
     if (!teacher) { respond.ok(res, { data: [] }); return; }
     const students = await prisma.student.findMany({
       where: { teacherId: teacher.id },
-      include: { payments: { orderBy: { createdAt: 'desc' }, take: 1 } },
+      include: {
+        payments: { orderBy: { createdAt: 'desc' }, take: 1 },
+        scheduleSlots: {
+          where: { isActive: true },
+          include: { schedule: { include: { modality: true } } },
+        },
+      },
+      orderBy: { name: 'asc' },
     });
     respond.ok(res, { data: students });
   } catch (err) { next(err); }
