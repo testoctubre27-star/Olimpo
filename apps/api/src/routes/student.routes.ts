@@ -230,6 +230,59 @@ router.patch('/:id', requireAdmin, audit('STUDENT_UPDATED', 'Student'),
   }
 );
 
+// ─── ASSIGN SCHEDULE ──────────────────────────
+router.post('/:id/assign-schedule', requireAdmin, audit('SCHEDULE_ASSIGNED', 'Student'),
+  async (req: Request, res: Response, next: NextFunction): Promise<void> => {
+    try {
+      const { scheduleId } = z.object({
+        scheduleId: z.string().nullable(),
+      }).parse(req.body);
+
+      const student = await prisma.student.findUnique({ where: { id: req.params.id } });
+      if (!student) { respond.error(res, { message: 'Alumno no encontrado' }, 404); return; }
+
+      // Remove existing slot if any
+      await prisma.scheduleSlot.updateMany({
+        where: { studentId: req.params.id, isActive: true },
+        data:  { isActive: false, releasedAt: new Date() },
+      });
+
+      if (scheduleId) {
+        // Verify schedule exists and has capacity
+        const schedule = await prisma.schedule.findUnique({
+          where: { id: scheduleId },
+          include: { slots: { where: { isActive: true } } },
+        });
+        if (!schedule) { respond.error(res, { message: 'Horario no encontrado' }, 404); return; }
+        if (schedule.slots.length >= schedule.capacity) {
+          respond.error(res, { message: 'El horario está lleno', code: 'SCHEDULE_FULL' }, 409); return;
+        }
+
+        // Create new slot
+        await prisma.scheduleSlot.create({
+          data: {
+            scheduleId,
+            studentId:  req.params.id,
+            teacherId:  student.teacherId ?? undefined,
+          },
+        });
+      }
+
+      const updated = await prisma.student.findUnique({
+        where: { id: req.params.id },
+        include: {
+          scheduleSlots: {
+            where: { isActive: true },
+            include: { schedule: { include: { modality: true } } },
+          },
+        },
+      });
+
+      respond.ok(res, { data: updated, message: scheduleId ? 'Horario asignado correctamente' : 'Horario removido' });
+    } catch (err) { next(err); }
+  }
+);
+
 // ─── ACTIVATE ─────────────────────────────────
 router.post('/:id/activate', requireAdmin, audit('STUDENT_ACTIVATED', 'Student'),
   async (req: Request, res: Response, next: NextFunction): Promise<void> => {

@@ -39,12 +39,48 @@ function useStudent(id: string) {
   });
 }
 
+interface Schedule {
+  id: string;
+  dayOfWeek: number;
+  startTime: string;
+  endTime: string;
+  capacity: number;
+  modalities?: { modality: { name: string } }[];
+  modality?: { name: string };
+  slots: { id: string }[];
+}
+
 function useTeachers() {
   return useQuery({
     queryKey: ['teachers'],
     queryFn: async () => {
       const { data } = await api.get('/teachers');
       return data.data as Teacher[];
+    },
+  });
+}
+
+function useSchedules() {
+  return useQuery({
+    queryKey: ['schedules'],
+    queryFn: async () => {
+      const { data } = await api.get('/schedules');
+      return data.data as Schedule[];
+    },
+  });
+}
+
+function useAssignSchedule(studentId: string) {
+  const qc = useQueryClient();
+  return useMutation({
+    mutationFn: async ({ scheduleId }: { scheduleId: string | null }) => {
+      const { data } = await api.post(`/students/${studentId}/assign-schedule`, { scheduleId });
+      return data;
+    },
+    onSuccess: () => {
+      qc.invalidateQueries({ queryKey: ['student', studentId] });
+      qc.invalidateQueries({ queryKey: ['schedules'] });
+      qc.invalidateQueries({ queryKey: ['my-schedules'] });
     },
   });
 }
@@ -106,8 +142,10 @@ export default function StudentDetailPage() {
   const navigate = useNavigate();
   const { data: student, isLoading } = useStudent(id!);
   const { data: teachers } = useTeachers();
-  const updateMutation = useUpdateStudent(id!);
+  const { data: schedules } = useSchedules();
+  const updateMutation  = useUpdateStudent(id!);
   const paymentMutation = useRegisterPayment(id!);
+  const assignMutation  = useAssignSchedule(id!);
 
   const [editing, setEditing]       = useState(false);
   const [showPayment, setShowPayment] = useState(false);
@@ -115,7 +153,7 @@ export default function StudentDetailPage() {
   // Edit form state
   const [form, setForm] = useState({
     name: '', phone: '', modality: '', teacherId: '',
-    tutorName: '', notes: '', status: '', paymentDay: '',
+    tutorName: '', notes: '', status: '', paymentDay: '', scheduleId: '',
   });
 
   const [payForm, setPayForm] = useState({
@@ -136,6 +174,7 @@ export default function StudentDetailPage() {
       notes:     student.notes ?? '',
       status:    student.status,
       paymentDay: student.paymentDay ? String(student.paymentDay) : '',
+      scheduleId: student.scheduleSlots?.[0]?.id ? 'assigned' : '',
     });
     setEditing(true);
   };
@@ -242,6 +281,48 @@ export default function StudentDetailPage() {
                     onChange={fi('teacherId')}
                   />
                 </div>
+                {/* Schedule selector */}
+                <div>
+                  <label style={{ fontSize: 13, fontWeight: 500, color: 'var(--text-secondary)', marginBottom: 6, display: 'block' }}>
+                    Horario asignado
+                  </label>
+                  <select
+                    value={form.scheduleId}
+                    onChange={async e => {
+                      const newScheduleId = e.target.value;
+                      setForm(f => ({ ...f, scheduleId: newScheduleId }));
+                      if (newScheduleId === 'assigned') return;
+                      try {
+                        await assignMutation.mutateAsync({ scheduleId: newScheduleId || null });
+                        toast.success(newScheduleId ? 'Horario asignado correctamente' : 'Horario removido');
+                      } catch (err) {
+                        toast.error(errMsg(err) ?? 'Error al asignar horario');
+                      }
+                    }}
+                    style={{ width: '100%', height: 38, padding: '0 12px', fontSize: 14, border: '1px solid var(--border)', borderRadius: 'var(--radius-md)', fontFamily: 'var(--font-sans)', color: 'var(--text-primary)', background: 'var(--surface)', outline: 'none' }}
+                  >
+                    {student?.scheduleSlots?.[0] && (
+                      <option value="assigned">
+                        {DAY_LABEL[student.scheduleSlots[0].schedule.dayOfWeek]} {student.scheduleSlots[0].schedule.startTime}–{student.scheduleSlots[0].schedule.endTime} (actual)
+                      </option>
+                    )}
+                    <option value="">Sin horario asignado</option>
+                    {(schedules ?? [])
+                      .filter(s => s.slots.length < s.capacity)
+                      .map(s => {
+                        const modalName = s.modalities?.[0]?.modality?.name ?? s.modality?.name ?? '';
+                        return (
+                          <option key={s.id} value={s.id}>
+                            {DAY_LABEL[s.dayOfWeek]} {s.startTime}–{s.endTime} · {modalName} ({s.slots.length}/{s.capacity})
+                          </option>
+                        );
+                      })}
+                  </select>
+                  {assignMutation.isPending && (
+                    <p style={{ fontSize: 12, color: 'var(--primary)', marginTop: 4 }}>Asignando...</p>
+                  )}
+                </div>
+
                 <div style={{ display: 'grid', gridTemplateColumns: '1fr 1fr', gap: 12 }}>
                   <div>
                     <label style={{ fontSize: 13, fontWeight: 500, color: 'var(--text-secondary)', marginBottom: 6, display: 'block' }}>
