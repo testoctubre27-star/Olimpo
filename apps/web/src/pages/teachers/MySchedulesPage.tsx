@@ -1,6 +1,6 @@
 import { useState } from 'react';
 import { useQuery, useMutation, useQueryClient } from '@tanstack/react-query';
-import { Plus, Trash2, Edit2, Users, Clock, CheckCircle, Link, Link2Off } from 'lucide-react';
+import { Plus, Trash2, Edit2, Users, Clock, CheckCircle, Link, Link2Off, UserPlus, X } from 'lucide-react';
 import { api } from '../../services/api';
 import { SectionHeader, Card, Button, Badge, Select, Empty } from '../../components/ui';
 import { Modal } from '../../components/ui/Modal';
@@ -48,6 +48,15 @@ const TIME_OPTIONS = Array.from({ length: 36 }, (_, i) => {
 
 const DAY_OPTIONS = DAY_LABEL.map((d, i) => ({ value: String(i), label: d }));
 
+// ─── Types (extra) ───────────────────────────
+interface MyStudent {
+  id: string;
+  name: string;
+  phone: string;
+  modality: string;
+  scheduleSlots: { scheduleId: string; isActive: boolean }[];
+}
+
 // ─── Hooks ────────────────────────────────────
 function useMySchedules() {
   return useQuery({
@@ -78,6 +87,44 @@ function useDeleteSchedule() {
 function usePairSchedule() {
   const qc = useQueryClient();
   return useMutation({ mutationFn: async ({ id, pairedWithId }: { id: string; pairedWithId: string | null }) => (await api.patch(`/teachers/my-schedules/${id}/pair`, { pairedWithId })).data, ...mutOpts(qc) });
+}
+
+function useMyStudentsList() {
+  return useQuery({
+    queryKey: ['my-students-list'],
+    queryFn: async () => {
+      const { data } = await api.get('/teachers/my-students');
+      return data.data as MyStudent[];
+    },
+  });
+}
+
+function useAssignStudentToSchedule() {
+  const qc = useQueryClient();
+  return useMutation({
+    mutationFn: async ({ studentId, scheduleId }: { studentId: string; scheduleId: string }) => {
+      const { data } = await api.post(`/students/${studentId}/assign-schedule`, { scheduleId });
+      return data;
+    },
+    onSuccess: () => {
+      qc.invalidateQueries({ queryKey: ['my-schedules'] });
+      qc.invalidateQueries({ queryKey: ['my-students-list'] });
+    },
+  });
+}
+
+function useRemoveStudentFromSchedule() {
+  const qc = useQueryClient();
+  return useMutation({
+    mutationFn: async ({ studentId }: { studentId: string }) => {
+      const { data } = await api.post(`/students/${studentId}/assign-schedule`, { scheduleId: null });
+      return data;
+    },
+    onSuccess: () => {
+      qc.invalidateQueries({ queryKey: ['my-schedules'] });
+      qc.invalidateQueries({ queryKey: ['my-students-list'] });
+    },
+  });
 }
 
 // ─── Modality Picker ──────────────────────────
@@ -158,15 +205,19 @@ const emptyForm = () => ({ dayOfWeek: '1', startTime: '09:00', endTime: '10:00',
 // ─── Page ─────────────────────────────────────
 export default function MySchedulesPage() {
   const { data: schedules, isLoading } = useMySchedules();
-  const createMutation = useCreateSchedule();
-  const updateMutation = useUpdateSchedule();
-  const deleteMutation = useDeleteSchedule();
-  const pairMutation   = usePairSchedule();
+  const createMutation  = useCreateSchedule();
+  const updateMutation  = useUpdateSchedule();
+  const deleteMutation  = useDeleteSchedule();
+  const pairMutation    = usePairSchedule();
+  const assignMutation  = useAssignStudentToSchedule();
+  const removeMutation  = useRemoveStudentFromSchedule();
+  const { data: myStudents } = useMyStudentsList();
 
-  const [showCreate,   setShowCreate]   = useState(false);
-  const [editTarget,   setEditTarget]   = useState<TeacherSchedule | null>(null);
-  const [deleteTarget, setDeleteTarget] = useState<TeacherSchedule | null>(null);
-  const [pairTarget,   setPairTarget]   = useState<TeacherSchedule | null>(null);
+  const [showCreate,     setShowCreate]     = useState(false);
+  const [editTarget,     setEditTarget]     = useState<TeacherSchedule | null>(null);
+  const [deleteTarget,   setDeleteTarget]   = useState<TeacherSchedule | null>(null);
+  const [pairTarget,     setPairTarget]     = useState<TeacherSchedule | null>(null);
+  const [assignTarget,   setAssignTarget]   = useState<TeacherSchedule | null>(null);
   const [selectedPairId, setSelectedPairId] = useState('');
 
   const [form,     setForm]     = useState(emptyForm());
@@ -270,6 +321,10 @@ export default function MySchedulesPage() {
                       </p>
                     </div>
                     <div style={{ display: 'flex', gap: 2 }}>
+                      <button onClick={() => setAssignTarget(s)}
+                        style={{ background: 'none', border: 'none', cursor: 'pointer', color: 'var(--primary)', padding: 6, borderRadius: 6, display: 'flex' }} title="Agregar alumno">
+                        <UserPlus size={14} />
+                      </button>
                       <button onClick={() => { setEditTarget(s); setEditForm({ dayOfWeek: String(s.dayOfWeek), startTime: s.startTime, endTime: s.endTime, modalities: s.modalities.map(m => ({ modality: m.modality.modality, capacity: m.capacity })) }); }}
                         style={{ background: 'none', border: 'none', cursor: 'pointer', color: 'var(--text-muted)', padding: 6, borderRadius: 6, display: 'flex' }} title="Editar">
                         <Edit2 size={14} />
@@ -324,9 +379,16 @@ export default function MySchedulesPage() {
                   {enrolled > 0 && (
                     <div style={{ marginTop: 10, paddingTop: 10, borderTop: '1px solid var(--border)' }}>
                       {s.slots.map(slot => (
-                        <div key={slot.student.id} style={{ display: 'flex', alignItems: 'center', gap: 8, padding: '3px 0' }}>
+                        <div key={slot.student.id} style={{ display: 'flex', alignItems: 'center', gap: 6, padding: '3px 0' }}>
                           <div style={{ width: 6, height: 6, borderRadius: '50%', background: slot.student.status === 'ACTIVE' ? 'var(--success)' : 'var(--warning)', flexShrink: 0 }} />
-                          <span style={{ fontSize: 12, color: 'var(--text-secondary)' }}>{slot.student.name}</span>
+                          <span style={{ fontSize: 12, color: 'var(--text-secondary)', flex: 1 }}>{slot.student.name}</span>
+                          <button
+                            onClick={() => removeMutation.mutate({ studentId: slot.student.id })}
+                            style={{ background: 'none', border: 'none', cursor: 'pointer', color: 'var(--danger)', padding: 2, borderRadius: 4, display: 'flex', opacity: 0.6 }}
+                            title="Quitar del horario"
+                          >
+                            <X size={11} />
+                          </button>
                         </div>
                       ))}
                     </div>
@@ -407,6 +469,94 @@ export default function MySchedulesPage() {
             <strong>{deleteTarget.startTime}–{deleteTarget.endTime}</strong>? Esta acción no se puede deshacer.
           </p>
         )}
+      </Modal>
+
+      {/* ── Assign students modal ── */}
+      <Modal
+        open={!!assignTarget}
+        onClose={() => setAssignTarget(null)}
+        title={assignTarget ? `Alumnos — ${DAY_LABEL[assignTarget.dayOfWeek]} ${assignTarget.startTime}–${assignTarget.endTime}` : ''}
+        size="md"
+        footer={<Button variant="secondary" onClick={() => setAssignTarget(null)}>Cerrar</Button>}
+      >
+        {assignTarget && (() => {
+          const enrolled     = assignTarget.slots.map(s => s.student.id);
+          const available    = assignTarget.slots.length < assignTarget.capacity;
+          const unassigned   = (myStudents ?? []).filter(s => !s.scheduleSlots?.some(ss => ss.isActive));
+          const alreadyHere  = (myStudents ?? []).filter(s => enrolled.includes(s.id));
+          const canAdd       = (myStudents ?? []).filter(s =>
+            !enrolled.includes(s.id) &&
+            !s.scheduleSlots?.some(ss => ss.isActive)
+          );
+
+          return (
+            <div style={{ display: 'flex', flexDirection: 'column', gap: 16 }}>
+              {/* Enrolled students */}
+              <div>
+                <p style={{ fontSize: 12, fontWeight: 600, color: 'var(--text-muted)', textTransform: 'uppercase', letterSpacing: '0.05em', marginBottom: 8 }}>
+                  Inscritos en este horario ({enrolled.length}/{assignTarget.capacity})
+                </p>
+                {enrolled.length === 0 && (
+                  <p style={{ fontSize: 13, color: 'var(--text-muted)' }}>Ningún alumno asignado aún</p>
+                )}
+                {assignTarget.slots.map(slot => (
+                  <div key={slot.student.id} style={{ display: 'flex', alignItems: 'center', gap: 8, padding: '7px 12px', background: 'var(--success-bg)', borderRadius: 'var(--radius-md)', marginBottom: 6 }}>
+                    <div style={{ width: 7, height: 7, borderRadius: '50%', background: 'var(--success)', flexShrink: 0 }} />
+                    <span style={{ fontSize: 13, color: 'var(--text-primary)', flex: 1, fontWeight: 500 }}>{slot.student.name}</span>
+                    <button
+                      onClick={async () => {
+                        await removeMutation.mutateAsync({ studentId: slot.student.id });
+                        toast.success(`${slot.student.name} removido del horario`);
+                      }}
+                      style={{ background: 'none', border: 'none', cursor: 'pointer', color: 'var(--danger)', padding: 4, borderRadius: 4, display: 'flex', fontSize: 12 }}
+                    >
+                      <X size={14} />
+                    </button>
+                  </div>
+                ))}
+              </div>
+
+              {/* Add students */}
+              {available && canAdd.length > 0 && (
+                <div>
+                  <p style={{ fontSize: 12, fontWeight: 600, color: 'var(--text-muted)', textTransform: 'uppercase', letterSpacing: '0.05em', marginBottom: 8 }}>
+                    Mis alumnos sin horario ({canAdd.length})
+                  </p>
+                  <div style={{ display: 'flex', flexDirection: 'column', gap: 6, maxHeight: 240, overflowY: 'auto' }}>
+                    {canAdd.map(s => (
+                      <div key={s.id} style={{ display: 'flex', alignItems: 'center', gap: 8, padding: '7px 12px', border: '1px solid var(--border)', borderRadius: 'var(--radius-md)' }}>
+                        <span style={{ fontSize: 13, color: 'var(--text-primary)', flex: 1 }}>{s.name}</span>
+                        <Button
+                          size="sm"
+                          loading={assignMutation.isPending}
+                          onClick={async () => {
+                            await assignMutation.mutateAsync({ studentId: s.id, scheduleId: assignTarget.id });
+                            toast.success(`${s.name} asignado al horario`);
+                          }}
+                          icon={<Plus size={12} />}
+                        >
+                          Agregar
+                        </Button>
+                      </div>
+                    ))}
+                  </div>
+                </div>
+              )}
+
+              {!available && (
+                <div style={{ padding: '10px 14px', background: 'var(--danger-bg)', borderRadius: 'var(--radius-md)', fontSize: 13, color: 'var(--danger)' }}>
+                  ⚠️ Este horario está lleno ({assignTarget.slots.length}/{assignTarget.capacity} alumnos)
+                </div>
+              )}
+
+              {available && canAdd.length === 0 && unassigned.length === 0 && (
+                <p style={{ fontSize: 13, color: 'var(--text-muted)' }}>
+                  Todos tus alumnos ya tienen horario asignado.
+                </p>
+              )}
+            </div>
+          );
+        })()}
       </Modal>
     </div>
   );
