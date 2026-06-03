@@ -1,5 +1,5 @@
 import { useState } from 'react';
-import { GraduationCap, Plus, Edit2, Power } from 'lucide-react';
+import { GraduationCap, Plus, Edit2, Power, KeyRound } from 'lucide-react';
 import { useQuery, useMutation, useQueryClient } from '@tanstack/react-query';
 import { api } from '../../services/api';
 import { SectionHeader, Badge, Button, Input } from '../../components/ui';
@@ -65,14 +65,24 @@ function useUpdateTeacher() {
   });
 }
 
+function useResetPassword() {
+  return useMutation({
+    mutationFn: async ({ id, password }: { id: string; password: string }) =>
+      (await api.post(`/teachers/${id}/reset-password`, { password })).data,
+  });
+}
+
 // ─── Page ─────────────────────────────────────
 export default function TeachersPage() {
   const { data: teachers, isLoading } = useTeachers();
   const createMutation = useCreateTeacher();
   const updateMutation = useUpdateTeacher();
+  const resetMutation  = useResetPassword();
 
-  const [showCreate, setShowCreate] = useState(false);
-  const [editTarget, setEditTarget] = useState<Teacher | null>(null);
+  const [showCreate,   setShowCreate]   = useState(false);
+  const [editTarget,   setEditTarget]   = useState<Teacher | null>(null);
+  const [resetTarget,  setResetTarget]  = useState<Teacher | null>(null);
+  const [newPassword,  setNewPassword]  = useState('');
 
   const [form, setForm] = useState({
     name: '', email: '', password: '', phone: '', commissionPct: '40',
@@ -118,6 +128,17 @@ export default function TeachersPage() {
       await updateMutation.mutateAsync({ id: t.id, isActive: !t.user.isActive });
       toast.success(t.user.isActive ? 'Maestro desactivado' : 'Maestro activado');
     } catch { toast.error('Error al cambiar estado'); }
+  };
+
+  const handleResetPassword = async () => {
+    if (!resetTarget) return;
+    if (newPassword.length < 6) { toast.error('Mínimo 6 caracteres'); return; }
+    try {
+      await resetMutation.mutateAsync({ id: resetTarget.id, password: newPassword });
+      toast.success(`Contraseña actualizada para ${resetTarget.user.email}`);
+      setResetTarget(null);
+      setNewPassword('');
+    } catch { toast.error('Error al actualizar contraseña'); }
   };
 
   // Helper: get schedule modality name safely
@@ -198,6 +219,12 @@ export default function TeachersPage() {
             <Edit2 size={14} />
           </button>
           <button
+            onClick={e => { e.stopPropagation(); setResetTarget(row); setNewPassword(''); }}
+            style={{ background: 'none', border: 'none', cursor: 'pointer', color: 'var(--text-muted)', padding: 5, borderRadius: 6, display: 'flex' }}
+            title="Cambiar contraseña">
+            <KeyRound size={14} />
+          </button>
+          <button
             onClick={e => { e.stopPropagation(); handleToggle(row); }}
             style={{ background: 'none', border: 'none', cursor: 'pointer', color: row.user.isActive ? 'var(--warning)' : 'var(--success)', padding: 5, borderRadius: 6, display: 'flex' }}
             title={row.user.isActive ? 'Desactivar' : 'Activar'}>
@@ -276,6 +303,35 @@ export default function TeachersPage() {
               style={{ width: '100%', height: 38, padding: '0 12px', fontSize: 14, border: '1px solid var(--border)', borderRadius: 'var(--radius-md)', fontFamily: 'var(--font-sans)', color: 'var(--text-primary)', background: 'var(--surface)', outline: 'none' }} />
           </div>
         </div>
+      </Modal>
+      {/* ── Reset password modal ── */}
+      <Modal open={!!resetTarget} onClose={() => { setResetTarget(null); setNewPassword(''); }} title="Cambiar contraseña" size="sm"
+        footer={<>
+          <Button variant="secondary" onClick={() => { setResetTarget(null); setNewPassword(''); }}>Cancelar</Button>
+          <Button loading={resetMutation.isPending} onClick={handleResetPassword} icon={<KeyRound size={14} />}>
+            Guardar contraseña
+          </Button>
+        </>}>
+        {resetTarget && (
+          <div style={{ display: 'flex', flexDirection: 'column', gap: 14 }}>
+            <div style={{ padding: '10px 14px', background: 'var(--info-bg)', borderRadius: 'var(--radius-md)', fontSize: 13, color: 'var(--info)' }}>
+              Cambiando contraseña de <strong>{resetTarget.user.name}</strong><br />
+              <span style={{ fontSize: 12, color: 'var(--text-muted)' }}>{resetTarget.user.email}</span>
+            </div>
+            <div>
+              <label style={{ fontSize: 13, fontWeight: 500, color: 'var(--text-secondary)', marginBottom: 6, display: 'block' }}>
+                Nueva contraseña
+              </label>
+              <input
+                type="text"
+                value={newPassword}
+                onChange={e => setNewPassword(e.target.value)}
+                placeholder="Mínimo 6 caracteres"
+                style={{ width: '100%', height: 38, padding: '0 12px', fontSize: 14, border: '1px solid var(--border)', borderRadius: 'var(--radius-md)', fontFamily: 'var(--font-sans)', color: 'var(--text-primary)', background: 'var(--surface)', outline: 'none' }}
+              />
+            </div>
+          </div>
+        )}
       </Modal>
     </div>
   );

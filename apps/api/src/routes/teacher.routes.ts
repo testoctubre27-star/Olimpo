@@ -367,4 +367,29 @@ router.patch('/my-schedules/:id/pair', requireTeacher, async (req: Request, res:
   } catch (err) { next(err); }
 });
 
+// POST /teachers/:id/reset-password — admin resets a teacher's password
+router.post('/:id/reset-password', requireAdmin,
+  async (req: Request, res: Response, next: NextFunction): Promise<void> => {
+    try {
+      const { password } = z.object({
+        password: z.string().min(6, 'Mínimo 6 caracteres'),
+      }).parse(req.body);
+
+      const teacher = await prisma.teacher.findUnique({
+        where: { id: req.params.id },
+        include: { user: true },
+      });
+      if (!teacher) { respond.error(res, { message: 'Maestro no encontrado' }, 404); return; }
+
+      const hashed = await bcrypt.hash(password, 12);
+      await prisma.user.update({
+        where: { id: teacher.userId },
+        data:  { password: hashed },
+      });
+
+      respond.ok(res, { data: null, message: `Contraseña actualizada para ${teacher.user.email}` });
+    } catch (err) { next(err); }
+  }
+);
+
 export default router;
