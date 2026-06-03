@@ -89,12 +89,13 @@ function usePairSchedule() {
   return useMutation({ mutationFn: async ({ id, pairedWithId }: { id: string; pairedWithId: string | null }) => (await api.patch(`/teachers/my-schedules/${id}/pair`, { pairedWithId })).data, ...mutOpts(qc) });
 }
 
-function useMyStudentsList() {
+function useAllStudents() {
   return useQuery({
-    queryKey: ['my-students-list'],
+    queryKey: ['all-students-list'],
     queryFn: async () => {
-      const { data } = await api.get('/teachers/my-students');
-      return data.data as MyStudent[];
+      // Fetch all students across all pages for assignment purposes
+      const { data } = await api.get('/students?limit=300');
+      return (data.data ?? []) as MyStudent[];
     },
   });
 }
@@ -211,13 +212,14 @@ export default function MySchedulesPage() {
   const pairMutation    = usePairSchedule();
   const assignMutation  = useAssignStudentToSchedule();
   const removeMutation  = useRemoveStudentFromSchedule();
-  const { data: myStudents } = useMyStudentsList();
+  const { data: myStudents } = useAllStudents();
 
   const [showCreate,     setShowCreate]     = useState(false);
   const [editTarget,     setEditTarget]     = useState<TeacherSchedule | null>(null);
   const [deleteTarget,   setDeleteTarget]   = useState<TeacherSchedule | null>(null);
   const [pairTarget,     setPairTarget]     = useState<TeacherSchedule | null>(null);
   const [assignTarget,   setAssignTarget]   = useState<TeacherSchedule | null>(null);
+  const [assignSearch,   setAssignSearch]   = useState('');
   const [selectedPairId, setSelectedPairId] = useState('');
 
   const [form,     setForm]     = useState(emptyForm());
@@ -474,7 +476,7 @@ export default function MySchedulesPage() {
       {/* ── Assign students modal ── */}
       <Modal
         open={!!assignTarget}
-        onClose={() => setAssignTarget(null)}
+        onClose={() => { setAssignTarget(null); setAssignSearch(''); }}
         title={assignTarget ? `Alumnos — ${DAY_LABEL[assignTarget.dayOfWeek]} ${assignTarget.startTime}–${assignTarget.endTime}` : ''}
         size="md"
         footer={<Button variant="secondary" onClick={() => setAssignTarget(null)}>Cerrar</Button>}
@@ -482,9 +484,7 @@ export default function MySchedulesPage() {
         {assignTarget && (() => {
           const enrolled     = assignTarget.slots.map(s => s.student.id);
           const available    = assignTarget.slots.length < assignTarget.capacity;
-          const unassigned   = (myStudents ?? []).filter(s => !s.scheduleSlots?.some(ss => ss.isActive));
-          const alreadyHere  = (myStudents ?? []).filter(s => enrolled.includes(s.id));
-          const canAdd       = (myStudents ?? []).filter(s =>
+          const canAdd = (myStudents ?? []).filter(s =>
             !enrolled.includes(s.id) &&
             !s.scheduleSlots?.some(ss => ss.isActive)
           );
@@ -520,10 +520,17 @@ export default function MySchedulesPage() {
               {available && canAdd.length > 0 && (
                 <div>
                   <p style={{ fontSize: 12, fontWeight: 600, color: 'var(--text-muted)', textTransform: 'uppercase', letterSpacing: '0.05em', marginBottom: 8 }}>
-                    Mis alumnos sin horario ({canAdd.length})
+                    Alumnos sin horario asignado ({canAdd.length})
                   </p>
+                  <input
+                    type="text"
+                    placeholder="Buscar alumno..."
+                    value={assignSearch}
+                    onChange={e => setAssignSearch(e.target.value)}
+                    style={{ width: '100%', height: 36, padding: '0 12px', fontSize: 13, border: '1px solid var(--border)', borderRadius: 'var(--radius-md)', fontFamily: 'var(--font-sans)', color: 'var(--text-primary)', background: 'var(--surface)', outline: 'none', marginBottom: 8 }}
+                  />
                   <div style={{ display: 'flex', flexDirection: 'column', gap: 6, maxHeight: 240, overflowY: 'auto' }}>
-                    {canAdd.map(s => (
+                    {canAdd.filter(s => !assignSearch || s.name.toLowerCase().includes(assignSearch.toLowerCase())).map(s => (
                       <div key={s.id} style={{ display: 'flex', alignItems: 'center', gap: 8, padding: '7px 12px', border: '1px solid var(--border)', borderRadius: 'var(--radius-md)' }}>
                         <span style={{ fontSize: 13, color: 'var(--text-primary)', flex: 1 }}>{s.name}</span>
                         <Button
@@ -549,7 +556,7 @@ export default function MySchedulesPage() {
                 </div>
               )}
 
-              {available && canAdd.length === 0 && unassigned.length === 0 && (
+              {available && canAdd.length === 0 && (
                 <p style={{ fontSize: 13, color: 'var(--text-muted)' }}>
                   Todos tus alumnos ya tienen horario asignado.
                 </p>
