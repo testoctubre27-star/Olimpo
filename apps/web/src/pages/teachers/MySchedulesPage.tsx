@@ -122,8 +122,11 @@ function useRemoveStudentFromSchedule() {
       return data;
     },
     onSuccess: () => {
+      // Invalidate everything related to students and schedules
       qc.invalidateQueries({ queryKey: ['my-schedules'] });
       qc.invalidateQueries({ queryKey: ['all-students-list'] });
+      qc.invalidateQueries({ queryKey: ['my-students'] });
+      qc.removeQueries({ queryKey: ['my-students'] });
     },
   });
 }

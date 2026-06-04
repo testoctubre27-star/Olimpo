@@ -10,7 +10,7 @@ export function useDashboard() {
       const { data } = await api.get('/reports/dashboard');
       return data.data as DashboardData;
     },
-    refetchInterval: 60_000, // Refresh every minute
+    refetchInterval: 60_000,
   });
 }
 
@@ -144,6 +144,17 @@ export function useTeachers() {
   });
 }
 
+export function useWhatsAppStatus() {
+  return useQuery({
+    queryKey: ['whatsapp-status'],
+    queryFn: async () => {
+      const { data } = await api.get('/whatsapp/status');
+      return data.data;
+    },
+    refetchInterval: 10_000,
+  });
+}
+
 export function useMyStudents() {
   return useQuery({
     queryKey: ['my-students'],
@@ -151,10 +162,12 @@ export function useMyStudents() {
       const { data } = await api.get('/teachers/my-students');
       return data.data as Student[];
     },
+    staleTime: 0,                // Always consider stale — refetch when invalidated
+    refetchOnWindowFocus: true,  // Refetch when tab regains focus
   });
 }
 
-// ─── Reports ─────────────────────────────────
+// ─── Reports ──────────────────────────────────
 
 export function useFinancialReport(from: string, to: string) {
   return useQuery({
@@ -166,7 +179,7 @@ export function useFinancialReport(from: string, to: string) {
   });
 }
 
-// ─── Types ───────────────────────────────────
+// ─── Types ────────────────────────────────────
 
 export interface DashboardData {
   students: { total: number; active: number; delinquent: number; suspended: number };
@@ -253,22 +266,4 @@ export interface FinancialReport {
   total: number;
   from: string;
   to: string;
-}
-
-// ─── WhatsApp Status ──────────────────────────
-
-export interface WhatsAppStatus {
-  connected: boolean;
-  hasQR: boolean;
-}
-
-export function useWhatsAppStatus() {
-  return useQuery({
-    queryKey: ['whatsapp-status'],
-    queryFn: async () => {
-      const { data } = await api.get('/whatsapp/status');
-      return data.data as WhatsAppStatus;
-    },
-    refetchInterval: 10_000, // Poll every 10s
-  });
 }
