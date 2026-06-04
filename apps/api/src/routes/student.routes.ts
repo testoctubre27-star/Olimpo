@@ -241,11 +241,19 @@ router.post('/:id/assign-schedule', requireTeacher, audit('SCHEDULE_ASSIGNED', '
       const student = await prisma.student.findUnique({ where: { id: req.params.id } });
       if (!student) { respond.error(res, { message: 'Alumno no encontrado' }, 404); return; }
 
-      // Remove existing active slot if any
+      // Remove existing active slot and clear teacherId from student
       await prisma.scheduleSlot.updateMany({
         where: { studentId: req.params.id, isActive: true },
         data:  { isActive: false, releasedAt: new Date() },
       });
+
+      // If no new schedule being assigned, also clear student.teacherId
+      if (!scheduleId) {
+        await prisma.student.update({
+          where: { id: req.params.id },
+          data:  { teacherId: null },
+        });
+      }
 
       if (scheduleId) {
         // Verify schedule exists and has capacity

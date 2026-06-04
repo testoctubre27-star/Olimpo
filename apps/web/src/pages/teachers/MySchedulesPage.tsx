@@ -109,7 +109,7 @@ function useAssignStudentToSchedule() {
     },
     onSuccess: () => {
       qc.invalidateQueries({ queryKey: ['my-schedules'] });
-      qc.invalidateQueries({ queryKey: ['my-students-list'] });
+      qc.invalidateQueries({ queryKey: ['all-students-list'] });
     },
   });
 }
@@ -123,7 +123,7 @@ function useRemoveStudentFromSchedule() {
     },
     onSuccess: () => {
       qc.invalidateQueries({ queryKey: ['my-schedules'] });
-      qc.invalidateQueries({ queryKey: ['my-students-list'] });
+      qc.invalidateQueries({ queryKey: ['all-students-list'] });
     },
   });
 }
