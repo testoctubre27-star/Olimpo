@@ -268,10 +268,22 @@ router.post('/:id/assign-schedule', requireTeacher, audit('SCHEDULE_ASSIGNED', '
 
         const slotTeacherId = schedule.teacherId ?? student.teacherId ?? undefined;
 
-        // Create the slot
-        await prisma.scheduleSlot.create({
-          data: { scheduleId, studentId: req.params.id, teacherId: slotTeacherId },
+        // Check for existing slot (may be inactive from previous removal)
+        const existingSlot = await prisma.scheduleSlot.findFirst({
+          where: { scheduleId, studentId: req.params.id },
         });
+
+        if (existingSlot) {
+          // Reactivate — avoids unique constraint violation on re-add
+          await prisma.scheduleSlot.update({
+            where: { id: existingSlot.id },
+            data:  { isActive: true, releasedAt: null, teacherId: slotTeacherId },
+          });
+        } else {
+          await prisma.scheduleSlot.create({
+            data: { scheduleId, studentId: req.params.id, teacherId: slotTeacherId },
+          });
+        }
 
         // Update student.teacherId so they appear in "Mis alumnos" of the teacher
         if (slotTeacherId) {
