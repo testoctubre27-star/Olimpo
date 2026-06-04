@@ -258,14 +258,20 @@ router.post('/:id/assign-schedule', requireTeacher, audit('SCHEDULE_ASSIGNED', '
           respond.error(res, { message: 'El horario está lleno', code: 'SCHEDULE_FULL' }, 409); return;
         }
 
-        // Get teacher from the schedule itself so the slot is linked correctly
+        const slotTeacherId = schedule.teacherId ?? student.teacherId ?? undefined;
+
+        // Create the slot
         await prisma.scheduleSlot.create({
-          data: {
-            scheduleId,
-            studentId: req.params.id,
-            teacherId: schedule.teacherId ?? student.teacherId ?? undefined,
-          },
+          data: { scheduleId, studentId: req.params.id, teacherId: slotTeacherId },
         });
+
+        // Update student.teacherId so they appear in "Mis alumnos" of the teacher
+        if (slotTeacherId) {
+          await prisma.student.update({
+            where: { id: req.params.id },
+            data:  { teacherId: slotTeacherId },
+          });
+        }
       }
 
       const updated = await prisma.student.findUnique({
