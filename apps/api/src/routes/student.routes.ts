@@ -231,7 +231,7 @@ router.patch('/:id', requireAdmin, audit('STUDENT_UPDATED', 'Student'),
 );
 
 // ─── ASSIGN SCHEDULE ──────────────────────────
-router.post('/:id/assign-schedule', requireAdmin, audit('SCHEDULE_ASSIGNED', 'Student'),
+router.post('/:id/assign-schedule', requireTeacher, audit('SCHEDULE_ASSIGNED', 'Student'),
   async (req: Request, res: Response, next: NextFunction): Promise<void> => {
     try {
       const { scheduleId } = z.object({
@@ -241,7 +241,7 @@ router.post('/:id/assign-schedule', requireAdmin, audit('SCHEDULE_ASSIGNED', 'St
       const student = await prisma.student.findUnique({ where: { id: req.params.id } });
       if (!student) { respond.error(res, { message: 'Alumno no encontrado' }, 404); return; }
 
-      // Remove existing slot if any
+      // Remove existing active slot if any
       await prisma.scheduleSlot.updateMany({
         where: { studentId: req.params.id, isActive: true },
         data:  { isActive: false, releasedAt: new Date() },
@@ -258,12 +258,12 @@ router.post('/:id/assign-schedule', requireAdmin, audit('SCHEDULE_ASSIGNED', 'St
           respond.error(res, { message: 'El horario está lleno', code: 'SCHEDULE_FULL' }, 409); return;
         }
 
-        // Create new slot
+        // Get teacher from the schedule itself so the slot is linked correctly
         await prisma.scheduleSlot.create({
           data: {
             scheduleId,
-            studentId:  req.params.id,
-            teacherId:  student.teacherId ?? undefined,
+            studentId: req.params.id,
+            teacherId: schedule.teacherId ?? student.teacherId ?? undefined,
           },
         });
       }
