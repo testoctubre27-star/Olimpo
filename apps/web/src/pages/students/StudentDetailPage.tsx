@@ -38,8 +38,13 @@ function useModalities() {
       // API may return array directly or { modalities: [], services: [] }
       if (Array.isArray(d)) return d as Modality[];
       // Flatten modalities + services into one list
+      // Services don't have a 'modality' enum field — use their name as the key
       const mods = Array.isArray(d?.modalities) ? d.modalities : [];
-      const svcs = Array.isArray(d?.services)   ? d.services   : [];
+      const svcs = Array.isArray(d?.services)
+        ? d.services.map((s: { id: string; name: string; isActive: boolean }) => ({
+            id: s.id, name: s.name, modality: `SVC_${s.id}`, isActive: s.isActive,
+          }))
+        : [];
       return [...mods, ...svcs] as Modality[];
     },
   });
@@ -111,8 +116,10 @@ export default function StudentDetailPage() {
   const handleSave = async () => {
     if (!form.name.trim()) { toast.error('El nombre es requerido'); return; }
     try {
+      // Don't send modality if it's a custom service (SVC_xxx) — backend enum doesn't support it
+      const modalityPayload = form.modality.startsWith('SVC_') ? {} : { modality: form.modality };
       await updateMutation.mutateAsync({
-        name: form.name.trim(), phone: form.phone.trim(), modality: form.modality,
+        name: form.name.trim(), phone: form.phone.trim(), ...modalityPayload,
         teacherId: form.teacherId || null, tutorName: form.tutorName.trim() || null,
         notes: form.notes.trim() || null, status: form.status,
         paymentDay: form.paymentDay ? Number(form.paymentDay) : null,

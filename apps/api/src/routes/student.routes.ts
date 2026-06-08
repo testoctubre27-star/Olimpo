@@ -18,10 +18,11 @@ const activateSchema = z.object({
 const createStudentSchema = z.object({
   name:     z.string().min(2, 'El nombre es requerido'),
   phone:    z.string().min(8, 'El teléfono es requerido'),
-  modality: z.enum([
-    'BABY_PHASE1','BABY_PHASE2','BABY_PHASE3',
-    'GROUP_CHILD','GROUP_ADULT','FREE_ACCESS','AQUA_THERAPY','PERSONAL_CHILD',
-  ]).default('FREE_ACCESS'),
+  // modality: z.enum([
+  //   'BABY_PHASE1','BABY_PHASE2','BABY_PHASE3',
+  //   'GROUP_CHILD','GROUP_ADULT','FREE_ACCESS','AQUA_THERAPY','PERSONAL_CHILD',
+  // ]).default('FREE_ACCESS'),
+  modality: z.string().optional(),
 
   // All optional — assigned later by admin
   scheduleId:  z.string().optional().nullable(),
@@ -77,7 +78,7 @@ router.post('/', requireAdmin, audit('STUDENT_CREATED_MANUALLY', 'Student'),
         data: {
           name:                 body.name,
           phone:                body.phone,
-          modality:             body.modality,
+          modality:             body.modality as never,
           tutorName:            body.tutorName,
           conversationState:    'ACTIVE',
           status:               'ACTIVE',
