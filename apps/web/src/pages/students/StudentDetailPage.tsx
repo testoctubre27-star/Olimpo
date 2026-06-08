@@ -30,7 +30,19 @@ function useSchedules() {
   return useQuery({ queryKey: ['schedules'], queryFn: async () => (await api.get('/schedules')).data.data as Schedule[] });
 }
 function useModalities() {
-  return useQuery({ queryKey: ['modalities-all'], queryFn: async () => (await api.get('/modalities?all=true')).data.data as Modality[] });
+  return useQuery({
+    queryKey: ['modalities-all'],
+    queryFn: async () => {
+      const res = await api.get('/modalities?all=true');
+      const d = res.data.data;
+      // API may return array directly or { modalities: [], services: [] }
+      if (Array.isArray(d)) return d as Modality[];
+      // Flatten modalities + services into one list
+      const mods = Array.isArray(d?.modalities) ? d.modalities : [];
+      const svcs = Array.isArray(d?.services)   ? d.services   : [];
+      return [...mods, ...svcs] as Modality[];
+    },
+  });
 }
 function useUpdateStudent(id: string) {
   const qc = useQueryClient();
