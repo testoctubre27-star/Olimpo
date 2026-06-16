@@ -46,10 +46,62 @@ const MAIN_MENU = `🏊‍♂️ ¡Bienvenido a *OLIMPO Centro de Terapia y Depo
 
 ${N[0]} 🎓 *Clase muestra* — Conoce nuestras instalaciones
 ${N[1]} 🌞 *Cursos de verano* — Inscríbete ahora
-${N[2]} 💳 *Realizar un pago* — Datos bancarios
-${N[3]} ❌ *Cancelar / Cambiar cita* — Gestionar mi lugar
+${N[2]} 👶🏼 *Clase bebés: 5 meses - 5 años* — Información
+${N[3]} 👦🏻 *Clase grupal: 5 años en adelante* — Información
+${N[4]} 🙋🏻 *Clase grupal: Adultos* — Información
+${N[5]} 💳 *Realizar un pago* — Datos bancarios
+${N[6]} ❌ *Cancelar / Cambiar cita* — Gestionar mi lugar
 
 _Responde con el número de tu elección_ 👆`;
+
+// ─── CLASS INFO MESSAGES ───────────────────────
+const CLASE_BEBES_MSG = `👶🏼 *CLASE BEBÉS: 5 MESES - 5 AÑOS* 🌊
+
+¡Estimulación temprana en el agua junto a sus papás! 💙
+
+━━━━━━━━━━━━━━━━━━━
+⚠️ *Qué debe traer tu bebé:*
+
+   🩲 Pañal acuático
+   🧢 Gorro
+   🩱 Traje de baño
+
+━━━━━━━━━━━━━━━━━━━
+Para más información o agendar tu lugar, comunícate directamente con nosotros. 🙏
+
+_Escribe *hola* para volver al menú principal_ 👋`;
+
+const CLASE_NINOS_MSG = `👦🏻 *CLASE GRUPAL: 5 AÑOS EN ADELANTE* 🏊‍♂️
+
+¡Aprende a nadar en un ambiente grupal y divertido! 🌊
+
+━━━━━━━━━━━━━━━━━━━
+⚠️ *Qué debe traer:*
+
+   🧢 Gorro
+   🥽 Googles
+   🩱 Traje de baño / Ropa de licra
+
+━━━━━━━━━━━━━━━━━━━
+Para más información o agendar tu lugar, comunícate directamente con nosotros. 🙏
+
+_Escribe *hola* para volver al menú principal_ 👋`;
+
+const CLASE_ADULTOS_MSG = `🙋🏻 *CLASE GRUPAL: ADULTOS* 🏊‍♀️
+
+¡Aprende o perfecciona tu técnica de natación! 🌊
+
+━━━━━━━━━━━━━━━━━━━
+⚠️ *Qué debes traer:*
+
+   🧢 Gorro
+   🥽 Googles
+   🩱 Traje de baño / Ropa de licra
+
+━━━━━━━━━━━━━━━━━━━
+Para más información o agendar tu lugar, comunícate directamente con nosotros. 🙏
+
+_Escribe *hola* para volver al menú principal_ 👋`;
 
 // ─── PAYMENT INFO ─────────────────────────────
 const PAYMENT_MSG = `💳 *INFORMACIÓN PARA REALIZAR TU PAGO* 💰
@@ -116,11 +168,26 @@ export async function handleIncomingMessage(phone: string, body: string): Promis
       case '1': await handleClaseMuestra(phone, data); break;
       case '2': await handleCursos(phone, data);       break;
       case '3': {
-        await send(phone, PAYMENT_MSG, 'PAYMENT');
+        await send(phone, CLASE_BEBES_MSG, 'CLASE_BEBES');
         await saveSD(phone, { step: 'DONE' });
         break;
       }
       case '4': {
+        await send(phone, CLASE_NINOS_MSG, 'CLASE_NINOS');
+        await saveSD(phone, { step: 'DONE' });
+        break;
+      }
+      case '5': {
+        await send(phone, CLASE_ADULTOS_MSG, 'CLASE_ADULTOS');
+        await saveSD(phone, { step: 'DONE' });
+        break;
+      }
+      case '6': {
+        await send(phone, PAYMENT_MSG, 'PAYMENT');
+        await saveSD(phone, { step: 'DONE' });
+        break;
+      }
+      case '7': {
         await send(phone, CANCEL_MSG, 'CANCEL');
         await saveSD(phone, { step: 'DONE' });
         break;
