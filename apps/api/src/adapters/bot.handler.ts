@@ -44,7 +44,7 @@ const MAIN_MENU = `🏊‍♂️ ¡Bienvenido a *OLIMPO Centro de Terapia y Depo
 
 ¿En qué te podemos ayudar hoy? 👇
 
-${N[0]} 🎓 *Clase muestra* — Conoce nuestras instalaciones
+${N[0]} 🎓 *Clase de Bebé (Clase muestra)* — Conoce nuestras instalaciones
 ${N[1]} 🌞 *Cursos de verano* — Inscríbete ahora
 ${N[2]} 👶🏼 *Clase bebés: 5 meses - 5 años* — Información
 ${N[3]} 👦🏻 *Clase grupal: 5 años en adelante* — Información
