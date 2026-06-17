@@ -311,9 +311,11 @@ export default function MySchedulesPage() {
           </h2>
           <div style={{ display: 'grid', gridTemplateColumns: 'repeat(auto-fill, minmax(300px, 1fr))', gap: 12 }}>
             {slots.map(s => {
-              const enrolled = s.slots.length;
-              const pct      = Math.round((enrolled / s.capacity) * 100);
               const paired   = s.pairedWithId ? getPaired(s.pairedWithId) : null;
+              const ownIds   = new Set(s.slots.map(sl => sl.student.id));
+              const allSlots = [...s.slots, ...(paired?.slots ?? []).filter(sl => !ownIds.has(sl.student.id))];
+              const enrolled = allSlots.length;
+              const pct      = Math.round((enrolled / s.capacity) * 100);
 
               return (
                 <Card key={s.id}>
@@ -383,7 +385,7 @@ export default function MySchedulesPage() {
                   {/* Student list */}
                   {enrolled > 0 && (
                     <div style={{ marginTop: 10, paddingTop: 10, borderTop: '1px solid var(--border)' }}>
-                      {s.slots.map(slot => (
+                      {allSlots.map(slot => (
                         <div key={slot.student.id} style={{ display: 'flex', alignItems: 'center', gap: 6, padding: '3px 0' }}>
                           <div style={{ width: 6, height: 6, borderRadius: '50%', background: slot.student.status === 'ACTIVE' ? 'var(--success)' : 'var(--warning)', flexShrink: 0 }} />
                           <span style={{ fontSize: 12, color: 'var(--text-secondary)', flex: 1 }}>{slot.student.name}</span>

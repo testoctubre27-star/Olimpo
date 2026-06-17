@@ -286,6 +286,23 @@ router.post('/:id/assign-schedule', requireTeacher, audit('SCHEDULE_ASSIGNED', '
           });
         }
 
+        // If this schedule is paired, also create a slot in the paired schedule
+        if (schedule.pairedWithId) {
+          const existingPairedSlot = await prisma.scheduleSlot.findFirst({
+            where: { scheduleId: schedule.pairedWithId, studentId: req.params.id },
+          });
+          if (existingPairedSlot) {
+            await prisma.scheduleSlot.update({
+              where: { id: existingPairedSlot.id },
+              data:  { isActive: true, releasedAt: null, teacherId: slotTeacherId },
+            });
+          } else {
+            await prisma.scheduleSlot.create({
+              data: { scheduleId: schedule.pairedWithId, studentId: req.params.id, teacherId: slotTeacherId },
+            });
+          }
+        }
+
         // Update student.teacherId so they appear in "Mis alumnos" of the teacher
         if (slotTeacherId) {
           await prisma.student.update({
