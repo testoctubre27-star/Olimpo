@@ -77,12 +77,18 @@ async function getAvailableSchedules(
     include: {
       modalities: { include: { modality: true } },
       slots: { where: { isActive: true } },
+      pairedWith: { include: { slots: { where: { isActive: true } } } },
     },
     orderBy: [{ dayOfWeek: 'asc' }, { startTime: 'asc' }],
   });
 
   return schedules
-    .filter(s => s.slots.length < s.capacity)
+    .filter(s => {
+      const ownIds = new Set(s.slots.map(sl => sl.studentId));
+      const pairedSlots = s.pairedWith?.slots ?? [];
+      const newFromPaired = pairedSlots.filter(sl => !ownIds.has(sl.studentId));
+      return s.slots.length + newFromPaired.length < s.capacity;
+    })
     .map(s => {
       const modName     = s.modalities?.[0]?.modality?.name ?? 'Clase';
       const teacherName = s.teacherId ? (nameById[s.teacherId] ?? 'Por asignar') : 'Por asignar';
