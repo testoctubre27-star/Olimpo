@@ -1,4 +1,4 @@
-import { ConversationState, Prisma } from '@prisma/client';
+import { ConversationState, Prisma, StudentStatus } from '@prisma/client';
 import { prisma } from '../config/database';
 import { WhatsAppAdapter } from './whatsapp.adapter';
 import { logger } from '../config/logger';
@@ -47,6 +47,57 @@ async function saveSD(phone: string, data: SD) {
     where: { phone },
     data: { data: data as unknown as Prisma.InputJsonValue },
   });
+}
+
+// ─── Name prompt ──────────────────────────────
+const NAME_PROMPT = `👤 *Nombre del alumno(a)*\n\nPor favor escríbeme el *nombre completo* del alumno(a) que tomará la clase.\n\n_Escribe *menú* en cualquier momento para volver al inicio_ 👋`;
+
+// ─── Helpers ──────────────────────────────────
+async function getStudentModalityFromSchedule(scheduleId: string): Promise<{ modality: string; teacherId: string | null } | null> {
+  const schedule = await prisma.schedule.findUnique({
+    where: { id: scheduleId },
+    include: { modalities: { include: { modality: true } }, teacher: { include: { user: true } } },
+  });
+  if (!schedule) return null;
+  const modalityEnum = schedule.modalities[0]?.modality?.modality;
+  if (!modalityEnum) return null;
+  return { modality: modalityEnum, teacherId: schedule.teacherId };
+}
+
+async function createStudentAndSlot(phone: string, name: string, scheduleId: string, modalityEnum: string): Promise<{ id: string } | null> {
+  // Re-check capacity
+  const schedule = await prisma.schedule.findUnique({
+    where: { id: scheduleId },
+    include: { slots: { where: { isActive: true } } },
+  });
+  if (!schedule || schedule.slots.length >= schedule.capacity) return null;
+
+  // Create or update student
+  const student = await prisma.student.upsert({
+    where: { phone },
+    update: { name, modality: modalityEnum as never },
+    create: {
+      phone,
+      name,
+      modality: modalityEnum as never,
+      status: StudentStatus.ACTIVE,
+      conversationState: ConversationState.ACTIVE,
+    },
+  });
+
+  // Create or reactivate slot
+  const existing = await prisma.scheduleSlot.findUnique({
+    where: { scheduleId_studentId: { scheduleId, studentId: student.id } },
+  });
+  if (!existing?.isActive) {
+    await prisma.scheduleSlot.upsert({
+      where: { scheduleId_studentId: { scheduleId, studentId: student.id } },
+      create: { scheduleId, studentId: student.id, teacherId: schedule.teacherId ?? undefined, isActive: true },
+      update: { isActive: true, releasedAt: null, teacherId: schedule.teacherId ?? undefined },
+    });
+  }
+
+  return { id: student.id };
 }
 
 // ─── Fetch available schedules ─────────────────
@@ -243,11 +294,23 @@ export async function handleIncomingMessage(phone: string, body: string): Promis
       return;
     }
 
-    await saveSD(phone, { ...data, step: 'CLASE_MUESTRA_CONFIRM', scheduleId: chosen.id, scheduleLabel: chosen.label, teacherName: chosen.teacherName });
+    await saveSD(phone, { ...data, step: 'CLASE_MUESTRA_NAME', scheduleId: chosen.id, scheduleLabel: chosen.label, teacherName: chosen.teacherName });
+    await send(phone, NAME_PROMPT, 'CLASE_MUESTRA_NAME');
+    return;
+  }
+
+  if (step === 'CLASE_MUESTRA_NAME') {
+    const name = body.trim();
+    if (name.length < 2) {
+      await send(phone, `⚠️ Por favor escribe un nombre válido (mínimo 2 caracteres).\n\n${NAME_PROMPT}`, 'RETRY');
+      return;
+    }
+    await saveSD(phone, { ...data, step: 'CLASE_MUESTRA_CONFIRM', name });
     await send(phone,
       `📋 *RESUMEN DE TU CLASE MUESTRA* 🎓\n\n` +
-      `📅 *Horario elegido:* ${chosen.label}\n` +
-      `🏊 *Maestro:* ${chosen.teacherName}\n` +
+      `👤 *Nombre:* ${name}\n` +
+      `📅 *Horario elegido:* ${data.scheduleLabel}\n` +
+      `🏊 *Maestro:* ${data.teacherName}\n` +
       `✨ *Es completamente gratuita* — Solo ven y conócenos!\n\n` +
       `━━━━━━━━━━━━━━━━━━━\n` +
       `¿Confirmas tu clase muestra?\n\n${N[0]} ✅ Sí, confirmar\n${N[1]} ❌ No, elegir otro horario`,
@@ -258,16 +321,38 @@ export async function handleIncomingMessage(phone: string, body: string): Promis
 
   if (step === 'CLASE_MUESTRA_CONFIRM') {
     if (text === '1') {
+      if (!data.scheduleId || !data.name) {
+        await send(phone, `😔 Ocurrió un error. Por favor intenta de nuevo.\n\n${MAIN_MENU}`, 'RETRY');
+        await saveSD(phone, { step: 'MAIN' });
+        return;
+      }
+
+      const scheduleInfo = await getStudentModalityFromSchedule(data.scheduleId);
+      if (!scheduleInfo) {
+        await send(phone, `😔 Error al obtener información del horario. Por favor intenta de nuevo.\n\n${MAIN_MENU}`, 'RETRY');
+        await saveSD(phone, { step: 'MAIN' });
+        return;
+      }
+
+      const result = await createStudentAndSlot(phone, data.name, data.scheduleId, scheduleInfo.modality);
+      if (!result) {
+        await send(phone, `😔 Lo sentimos, este horario ya no tiene cupo disponible. Por favor elige otro horario.\n\n${MAIN_MENU}`, 'RETRY');
+        await saveSD(phone, { step: 'MAIN' });
+        return;
+      }
+
       await prisma.notificationLog.create({
         data: {
           phone,
+          studentId: result.id,
           type: 'CLASE_MUESTRA',
-          message: `Clase muestra solicitada: ${data.scheduleLabel} — teléfono: ${phone}`,
+          message: `Clase muestra solicitada: ${data.scheduleLabel} — ${data.name}`,
         },
       });
       await saveSD(phone, { step: 'DONE' });
       await send(phone,
         `🎉 *¡CLASE MUESTRA CONFIRMADA!* 🏊‍♂️\n\n` +
+        `👤 *Nombre:* ${data.name}\n` +
         `📅 *Horario:* ${data.scheduleLabel}\n` +
         `👨‍🏫 *Maestro:* ${data.teacherName}\n\n` +
         `━━━━━━━━━━━━━━━━━━━\n` +
@@ -301,13 +386,25 @@ export async function handleIncomingMessage(phone: string, body: string): Promis
       return;
     }
 
-    await saveSD(phone, { ...data, step: 'CLASE_NINOS_CONFIRM', scheduleId: chosen.id, scheduleLabel: chosen.label, teacherName: chosen.teacherName });
+    await saveSD(phone, { ...data, step: 'CLASE_NINOS_NAME', scheduleId: chosen.id, scheduleLabel: chosen.label, teacherName: chosen.teacherName });
+    await send(phone, NAME_PROMPT, 'CLASE_NINOS_NAME');
+    return;
+  }
+
+  if (step === 'CLASE_NINOS_NAME') {
+    const name = body.trim();
+    if (name.length < 2) {
+      await send(phone, `⚠️ Por favor escribe un nombre válido (mínimo 2 caracteres).\n\n${NAME_PROMPT}`, 'RETRY');
+      return;
+    }
+    await saveSD(phone, { ...data, step: 'CLASE_NINOS_CONFIRM', name });
     await send(phone,
       `📋 *RESUMEN DE TU LUGAR* 👦🏻🏊‍♂️\n\n` +
-      `📅 *Horario elegido:* ${chosen.label}\n` +
-      `🏊 *Maestro:* ${chosen.teacherName}\n\n` +
+      `👤 *Nombre:* ${name}\n` +
+      `📅 *Horario elegido:* ${data.scheduleLabel}\n` +
+      `🏊 *Maestro:* ${data.teacherName}\n\n` +
       `━━━━━━━━━━━━━━━━━━━\n` +
-      `¿Confirmas tu interés en este horario?\n\n${N[0]} ✅ Sí, apartar lugar\n${N[1]} ❌ No, elegir otro horario`,
+      `¿Confirmas tu lugar en este horario?\n\n${N[0]} ✅ Sí, apartar lugar\n${N[1]} ❌ No, elegir otro horario`,
       'CLASE_NINOS_CONFIRM'
     );
     return;
@@ -315,16 +412,38 @@ export async function handleIncomingMessage(phone: string, body: string): Promis
 
   if (step === 'CLASE_NINOS_CONFIRM') {
     if (text === '1') {
+      if (!data.scheduleId || !data.name) {
+        await send(phone, `😔 Ocurrió un error. Por favor intenta de nuevo.\n\n${MAIN_MENU}`, 'RETRY');
+        await saveSD(phone, { step: 'MAIN' });
+        return;
+      }
+
+      const scheduleInfo = await getStudentModalityFromSchedule(data.scheduleId);
+      if (!scheduleInfo) {
+        await send(phone, `😔 Error al obtener información del horario. Por favor intenta de nuevo.\n\n${MAIN_MENU}`, 'RETRY');
+        await saveSD(phone, { step: 'MAIN' });
+        return;
+      }
+
+      const result = await createStudentAndSlot(phone, data.name, data.scheduleId, scheduleInfo.modality);
+      if (!result) {
+        await send(phone, `😔 Lo sentimos, este horario ya no tiene cupo disponible. Por favor elige otro horario.\n\n${MAIN_MENU}`, 'RETRY');
+        await saveSD(phone, { step: 'MAIN' });
+        return;
+      }
+
       await prisma.notificationLog.create({
         data: {
           phone,
+          studentId: result.id,
           type: 'CLASE_NINOS_INTEREST',
-          message: `Interés en clase grupal niños: ${data.scheduleLabel} — teléfono: ${phone}`,
+          message: `Lugar apartado en clase grupal niños: ${data.scheduleLabel} — ${data.name}`,
         },
       });
       await saveSD(phone, { step: 'DONE' });
       await send(phone,
         `✅ *¡LUGAR APARTADO!* 👦🏻🌊\n\n` +
+        `👤 *Nombre:* ${data.name}\n` +
         `📅 *Horario:* ${data.scheduleLabel}\n` +
         `👨‍🏫 *Maestro:* ${data.teacherName}\n\n` +
         `━━━━━━━━━━━━━━━━━━━\n` +
@@ -356,13 +475,25 @@ export async function handleIncomingMessage(phone: string, body: string): Promis
       return;
     }
 
-    await saveSD(phone, { ...data, step: 'CLASE_ADULTOS_CONFIRM', scheduleId: chosen.id, scheduleLabel: chosen.label, teacherName: chosen.teacherName });
+    await saveSD(phone, { ...data, step: 'CLASE_ADULTOS_NAME', scheduleId: chosen.id, scheduleLabel: chosen.label, teacherName: chosen.teacherName });
+    await send(phone, NAME_PROMPT, 'CLASE_ADULTOS_NAME');
+    return;
+  }
+
+  if (step === 'CLASE_ADULTOS_NAME') {
+    const name = body.trim();
+    if (name.length < 2) {
+      await send(phone, `⚠️ Por favor escribe un nombre válido (mínimo 2 caracteres).\n\n${NAME_PROMPT}`, 'RETRY');
+      return;
+    }
+    await saveSD(phone, { ...data, step: 'CLASE_ADULTOS_CONFIRM', name });
     await send(phone,
       `📋 *RESUMEN DE TU LUGAR* 🙋🏻🏊‍♀️\n\n` +
-      `📅 *Horario elegido:* ${chosen.label}\n` +
-      `🏊 *Maestro/a:* ${chosen.teacherName}\n\n` +
+      `👤 *Nombre:* ${name}\n` +
+      `📅 *Horario elegido:* ${data.scheduleLabel}\n` +
+      `🏊 *Maestro/a:* ${data.teacherName}\n\n` +
       `━━━━━━━━━━━━━━━━━━━\n` +
-      `¿Confirmas tu interés en este horario?\n\n${N[0]} ✅ Sí, apartar lugar\n${N[1]} ❌ No, elegir otro horario`,
+      `¿Confirmas tu lugar en este horario?\n\n${N[0]} ✅ Sí, apartar lugar\n${N[1]} ❌ No, elegir otro horario`,
       'CLASE_ADULTOS_CONFIRM'
     );
     return;
@@ -370,16 +501,38 @@ export async function handleIncomingMessage(phone: string, body: string): Promis
 
   if (step === 'CLASE_ADULTOS_CONFIRM') {
     if (text === '1') {
+      if (!data.scheduleId || !data.name) {
+        await send(phone, `😔 Ocurrió un error. Por favor intenta de nuevo.\n\n${MAIN_MENU}`, 'RETRY');
+        await saveSD(phone, { step: 'MAIN' });
+        return;
+      }
+
+      const scheduleInfo = await getStudentModalityFromSchedule(data.scheduleId);
+      if (!scheduleInfo) {
+        await send(phone, `😔 Error al obtener información del horario. Por favor intenta de nuevo.\n\n${MAIN_MENU}`, 'RETRY');
+        await saveSD(phone, { step: 'MAIN' });
+        return;
+      }
+
+      const result = await createStudentAndSlot(phone, data.name, data.scheduleId, scheduleInfo.modality);
+      if (!result) {
+        await send(phone, `😔 Lo sentimos, este horario ya no tiene cupo disponible. Por favor elige otro horario.\n\n${MAIN_MENU}`, 'RETRY');
+        await saveSD(phone, { step: 'MAIN' });
+        return;
+      }
+
       await prisma.notificationLog.create({
         data: {
           phone,
+          studentId: result.id,
           type: 'CLASE_ADULTOS_INTEREST',
-          message: `Interés en clase grupal adultos: ${data.scheduleLabel} — teléfono: ${phone}`,
+          message: `Lugar apartado en clase grupal adultos: ${data.scheduleLabel} — ${data.name}`,
         },
       });
       await saveSD(phone, { step: 'DONE' });
       await send(phone,
         `✅ *¡LUGAR APARTADO!* 🙋🏻🌊\n\n` +
+        `👤 *Nombre:* ${data.name}\n` +
         `📅 *Horario:* ${data.scheduleLabel}\n` +
         `👨‍🏫 *Maestro/a:* ${data.teacherName}\n\n` +
         `━━━━━━━━━━━━━━━━━━━\n` +
@@ -411,14 +564,26 @@ export async function handleIncomingMessage(phone: string, body: string): Promis
       return;
     }
 
-    await saveSD(phone, { ...data, step: 'CURSO_CONFIRM', courseId: chosen.id, courseName: chosen.name, coursePrice: chosen.price });
+    await saveSD(phone, { ...data, step: 'CURSO_NAME', courseId: chosen.id, courseName: chosen.name, coursePrice: chosen.price });
+    await send(phone,
+      `👤 *Nombre del alumno(a)*\n\nPor favor escríbeme el *nombre completo* del alumno(a) que se inscribirá al curso.\n\n_Escribe *menú* en cualquier momento para volver al inicio_ 👋`,
+      'CURSO_NAME'
+    );
+    return;
+  }
+
+  if (step === 'CURSO_NAME') {
+    const name = body.trim();
+    if (name.length < 2) {
+      await send(phone, `⚠️ Por favor escribe un nombre válido (mínimo 2 caracteres).\n\n👤 *Nombre del alumno(a)*\n\nPor favor escríbeme el *nombre completo* del alumno(a) que se inscribirá al curso.\n\n_Escribe *menú* en cualquier momento para volver al inicio_ 👋`, 'RETRY');
+      return;
+    }
+    await saveSD(phone, { ...data, step: 'CURSO_CONFIRM', name });
     await send(phone,
       `📋 *RESUMEN DE TU INSCRIPCIÓN* 🌞\n\n` +
-      `🏊 *Curso:* ${chosen.name}\n` +
-      `📅 *Fechas:* ${chosen.start} al ${chosen.end}\n` +
-      `🕐 *Horario:* ${chosen.period}\n` +
-      `💰 *Precio:* $${chosen.price.toLocaleString('es-MX')} MXN\n` +
-      `✅ *Lugares disponibles:* ${chosen.spots}\n\n` +
+      `👤 *Nombre:* ${name}\n` +
+      `🏊 *Curso:* ${data.courseName}\n` +
+      `💰 *Precio:* $${Number(data.coursePrice).toLocaleString('es-MX')} MXN\n\n` +
       `━━━━━━━━━━━━━━━━━━━\n` +
       `El pago es *50% de anticipo* para apartar tu lugar.\n\n` +
       `¿Confirmas tu inscripción?\n\n${N[0]} ✅ Sí, inscribirme\n${N[1]} ❌ No, elegir otro`,
@@ -429,18 +594,67 @@ export async function handleIncomingMessage(phone: string, body: string): Promis
 
   if (step === 'CURSO_CONFIRM') {
     if (text === '1') {
+      if (!data.courseId || !data.name) {
+        await send(phone, `😔 Ocurrió un error. Por favor intenta de nuevo.\n\n${MAIN_MENU}`, 'RETRY');
+        await saveSD(phone, { step: 'MAIN' });
+        return;
+      }
+
+      // Re-check course capacity
+      const course = await prisma.summerCourse.findUnique({
+        where: { id: data.courseId },
+        include: { enrollments: { where: { status: 'CONFIRMED' } } },
+      });
+      if (!course || course.enrollments.length >= course.maxCapacity) {
+        await send(phone, `😔 Lo sentimos, este curso ya no tiene lugares disponibles. Por favor elige otro curso.\n\n${MAIN_MENU}`, 'RETRY');
+        await saveSD(phone, { step: 'MAIN' });
+        return;
+      }
+
+      // Create or update student
+      const student = await prisma.student.upsert({
+        where: { phone },
+        update: { name: data.name },
+        create: {
+          phone,
+          name: data.name,
+          modality: 'FREE_ACCESS' as never,
+          status: StudentStatus.PENDING_PAYMENT,
+          conversationState: ConversationState.ACTIVE,
+        },
+      });
+
+      // Create or update enrollment
+      await prisma.summerCourseEnrollment.upsert({
+        where: { courseId_studentPhone: { courseId: data.courseId, studentPhone: phone } },
+        create: {
+          courseId: data.courseId,
+          studentId: student.id,
+          studentPhone: phone,
+          studentName: data.name,
+          status: 'PENDING',
+        },
+        update: {
+          studentId: student.id,
+          studentName: data.name,
+          status: 'PENDING',
+        },
+      });
+
       await prisma.notificationLog.create({
         data: {
           phone,
+          studentId: student.id,
           type: 'EXTRA_ENROLLMENT',
-          message: `Interés en curso de verano: ${data.courseName} — teléfono: ${phone}. Pendiente de confirmar anticipo 50%.`,
+          message: `Inscripción a curso de verano: ${data.courseName} — ${data.name}. Pendiente de confirmar anticipo 50%.`,
         },
       });
       await saveSD(phone, { step: 'DONE' });
       await send(phone,
         `🎉 *¡INSCRIPCIÓN REGISTRADA!* 🌞🏊‍♂️\n\n` +
+        `👤 *Nombre:* ${data.name}\n` +
         `📚 *Curso:* ${data.courseName}\n` +
-        `💰 *Anticipo (50%):* $${Math.round((data.coursePrice as number) / 2).toLocaleString('es-MX')} MXN\n\n` +
+        `💰 *Anticipo (50%):* $${Math.round(Number(data.coursePrice) / 2).toLocaleString('es-MX')} MXN\n\n` +
         `━━━━━━━━━━━━━━━━━━━\n` +
         `💳 *Para apartar tu lugar*, realiza el anticipo a:\n\n` +
         `🏦 *CLABE:* 722969010560005718\n` +
