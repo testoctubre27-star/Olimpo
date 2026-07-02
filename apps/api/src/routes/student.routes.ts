@@ -2,6 +2,7 @@ import { Router, Request, Response, NextFunction } from 'express';
 import { z } from 'zod';
 import { authenticate, requireAdmin, requireTeacher } from '../middleware/auth';
 import { StudentService } from '../services/student.service';
+import { runPaymentReminders } from '../services/payment-reminder.service';
 import { prisma } from '../config/database';
 import { respond } from '../utils/response';
 import { audit } from '../middleware/audit';
@@ -344,6 +345,16 @@ router.post('/:id/suspend', requireAdmin, audit('STUDENT_SUSPENDED', 'Student'),
     try {
       await StudentService.suspend(req.params.id);
       respond.noContent(res);
+    } catch (err) { next(err); }
+  }
+);
+
+// ─── TRIGGER PAYMENT REMINDERS (admin) ─────────
+router.post('/trigger-reminders', requireAdmin,
+  async (_req: Request, res: Response, next: NextFunction): Promise<void> => {
+    try {
+      await runPaymentReminders();
+      respond.ok(res, { data: null, message: 'Recordatorios de pago enviados correctamente' });
     } catch (err) { next(err); }
   }
 );
