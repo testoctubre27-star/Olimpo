@@ -12,16 +12,16 @@ Esta guía te lleva desde cero hasta el sistema funcionando, paso a paso.
 | npm         | 9.x           | `npm -v`      |
 | Git         | cualquiera    | `git -v`      |
 
-> **Redis** es necesario para los cron jobs y la caché. En desarrollo puedes usar
+> **Redis** se usa para la caché y los cron jobs. En desarrollo puedes usar
 > [Redis Cloud free tier](https://redis.io/try-free/) si no quieres instalarlo localmente.
 
 ---
 
-## Paso 1 — Descomprime y entra al proyecto
+## Paso 1 — Clona el proyecto
 
 ```bash
-unzip olimpo-bloque-2.zip
-cd olimpo
+git clone git@github.com:ErickBorgesGalindo/Olimpo.git
+cd Olimpo
 ```
 
 ---
@@ -32,11 +32,10 @@ cd olimpo
 2. Haz clic en el botón **"Connect"** (arriba a la derecha)
 3. Selecciona la pestaña **"ORMs"** → **"Prisma"**
 4. Copia las dos URLs que aparecen:
-   - `DATABASE_URL` (contiene puerto 6543 + `pgbouncer=true`)
-   - `DIRECT_URL` (contiene puerto 5432)
+   - `DATABASE_URL` (connection pooling — puerto 6543)
+   - `DIRECT_URL` (conexión directa — puerto 5432)
 
-Tu `PROJECT_REF` ya conocido es `dvqqzwupbeqfixmmpczs`.
-Las URLs se verán así:
+Se verán así:
 
 ```
 DATABASE_URL="postgresql://postgres.dvqqzwupbeqfixmmpczs:[PASSWORD]@aws-0-us-east-1.pooler.supabase.com:6543/postgres?pgbouncer=true&connection_limit=1"
@@ -52,46 +51,44 @@ cd apps/api
 cp .env.example .env
 ```
 
-Edita `apps/api/.env` y completa:
-
 ### 3.1 — Base de datos (las URLs del Paso 2)
 ```env
 DATABASE_URL="postgresql://postgres.dvqqzwupbeqfixmmpczs:[TU-PASSWORD]@aws-0-us-east-1.pooler.supabase.com:6543/postgres?pgbouncer=true&connection_limit=1"
 DIRECT_URL="postgresql://postgres.dvqqzwupbeqfixmmpczs:[TU-PASSWORD]@aws-0-us-east-1.pooler.supabase.com:5432/postgres"
 ```
 
-### 3.2 — JWT Secret (genera uno seguro)
+### 3.2 — JWT Secret y Setup Token (genera ambos)
+
+El repo incluye un generador de tokens seguros:
+
 ```bash
-node -e "console.log(require('crypto').randomBytes(64).toString('hex'))"
+node apps/api/src/scripts/generate-tokens.js
 ```
-Copia el resultado y pégalo en:
+
+Copia los dos valores que imprime y pégalos en tu `.env`:
+
 ```env
 JWT_SECRET=el_resultado_del_comando_anterior
+SETUP_TOKEN=el_otro_resultado_del_comando_anterior
 ```
 
-### 3.3 — Setup token (para crear el primer admin)
-```bash
-node -e "console.log(require('crypto').randomBytes(20).toString('hex'))"
-```
-```env
-SETUP_TOKEN=el_resultado_del_comando_anterior
-```
-**Guárdalo** — lo necesitarás en el Paso 6.
+**Guarda el `SETUP_TOKEN`** — lo necesitarás en el Paso 6.
 
-### 3.4 — Redis
-Si tienes Redis local:
+### 3.3 — Redis
 ```env
 REDIS_URL=redis://localhost:6379
 ```
-Si usas Redis Cloud, pega la URL que te dieron.
+Si usas Redis Cloud / Upstash, pega la URL `rediss://...` que te dieron.
 
-### 3.5 — Twilio (puedes dejarlo vacío por ahora)
+### 3.4 — CORS (frontend)
 ```env
-TWILIO_ACCOUNT_SID=ACxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxx
-TWILIO_AUTH_TOKEN=xxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxx
-TWILIO_WHATSAPP_FROM=whatsapp:+14155238886
+FRONTEND_URL=http://localhost:5173
 ```
-> El sistema arranca sin Twilio. El bot no enviará mensajes hasta que configures credenciales reales.
+
+### 3.5 — API_URL
+```env
+API_URL=http://localhost:4000
+```
 
 ---
 
@@ -113,7 +110,6 @@ VITE_API_URL=http://localhost:4000/api
 
 ```bash
 # Desde la raíz del proyecto
-cd ../..
 npm install
 
 # Aplica el schema a Supabase (crea todas las tablas)
@@ -130,13 +126,16 @@ Si ves `✓ Your database is now in sync with your Prisma schema`, todo está bi
 
 ## Paso 6 — Crea el primer administrador
 
-Con el servidor **parado**, llama al endpoint de setup:
+Levanta el servidor:
 
 ```bash
-# Primero levanta el servidor en una terminal separada:
+cd ../..
 npm run dev
+```
 
-# En otra terminal, llama al endpoint de setup:
+En otra terminal, llama al endpoint de setup (solo disponible en el primer uso):
+
+```bash
 curl -X POST http://localhost:4000/api/setup \
   -H "Content-Type: application/json" \
   -d '{
@@ -151,7 +150,7 @@ curl -X POST http://localhost:4000/api/setup \
 ```json
 {
   "success": true,
-  "message": "✅ Administrador creado correctamente...",
+  "message": "Administrador creado. Este endpoint ya no está disponible.",
   "data": {
     "id": "...",
     "name": "Administrador OLIMPO",
@@ -162,14 +161,25 @@ curl -X POST http://localhost:4000/api/setup \
 ```
 
 > A partir de este momento, el endpoint `/api/setup` devuelve **409** automáticamente.
-> No necesitas deshabilitarlo manualmente.
+> En producción, además, desactiva `ALLOW_SETUP` una vez creado el primer admin.
 
 ---
 
-## Paso 7 — Levanta el sistema completo
+## Paso 7 — Seed de producción (opcional)
+
+Crea las modalidades reales y dos maestros de prueba:
 
 ```bash
-# Desde la raíz del proyecto
+npm run seed:production --workspace=apps/api
+```
+
+> Imprime las credenciales de los maestros de prueba en consola. Cambia sus contraseñas antes de usar en producción.
+
+---
+
+## Paso 8 — Levanta el sistema completo
+
+```bash
 npm run dev
 ```
 
@@ -181,7 +191,7 @@ Abre http://localhost:5173 e ingresa con las credenciales que creaste en el Paso
 
 ---
 
-## Paso 8 — Verifica que todo funciona
+## Paso 9 — Verifica que todo funciona
 
 ```bash
 # Health check del API
@@ -197,77 +207,96 @@ curl -X POST http://localhost:4000/api/auth/login \
 
 ---
 
-## Configuración de Twilio (WhatsApp)
+## Configuración de WhatsApp (Baileys)
 
-### Modo Sandbox (desarrollo, gratis)
+El bot usa **Baileys** (WhatsApp Web). No requiere Twilio ni servicios externos; solo escanear un QR una vez. La sesión se guarda en la tabla `whatsapp_sessions` y se restaura automáticamente al reiniciar.
 
-1. Ve a [console.twilio.com](https://console.twilio.com)
-2. Crea una cuenta gratuita
-3. Ve a **Messaging → Try it out → Send a WhatsApp message**
-4. Sigue las instrucciones para unirte al sandbox (envías un mensaje desde tu WhatsApp)
-5. En **Sandbox settings**, configura el webhook:
+1. Inicia sesión en el panel como administrador.
+2. Abre la página para vincular WhatsApp:
    ```
-   When a message comes in: https://TU-API.onrender.com/api/webhook/whatsapp
+   http://localhost:4000/api/whatsapp/qr?token=<TU_JWT_DE_ADMIN>
    ```
-6. Copia `Account SID` y `Auth Token` de la página principal
-7. Actualiza tu `.env`:
-   ```env
-   TWILIO_ACCOUNT_SID=ACxxxxxxxx...
-   TWILIO_AUTH_TOKEN=xxxxxxxx...
-   TWILIO_WHATSAPP_FROM=whatsapp:+14155238886
-   ```
+   Puedes obtener el JWT desde el login (`accessToken`) o desde el almacenamiento del navegador.
+3. En tu teléfono: **WhatsApp → Configuración → Dispositivos vinculados → Vincular un dispositivo**.
+4. Escanea el QR mostrado.
 
-### Para pruebas locales (Twilio necesita una URL pública)
+Cuando la página muestre **"WhatsApp conectado"**, el bot está activo y responderá en el número vinculado.
 
-Usa [ngrok](https://ngrok.com) para exponer tu API local:
-```bash
-ngrok http 4000
-# Copia la URL https://xxxx.ngrok.io
-# Ponla en Twilio: https://xxxx.ngrok.io/api/webhook/whatsapp
-```
+### Flujo de conversación del bot
+
+El bot tiene un único flujo de **2 pasos** y no guarda datos del usuario:
+
+1. **Inicio** — Cuando un usuario inicia la conversación o saluda, el bot responde con la lista de servicios:
+   Natación bebés (5-12 meses, 1-3 años, 3 a 5 años), Natación grupal, Natación personalizada, Natación Acceso libre, Terapia acuática y Calistenia.
+2. **Selección** — Ante cualquier respuesta del usuario, el bot confirma que un asesor lo contactará en un **máximo de 24 horas**.
+
+El flujo se reinicia con el siguiente mensaje. La tabla `bot_sessions` solo guarda el paso actual de la conversación
+(para saber si ya se mostró el menú); no se almacena información personal ni de contacto.
+
+> **Nota histórica:** el flujo anterior del bot (clase muestra, horarios, apartado de lugar, cursos de verano,
+> pagos, cancelación y alta de alumnos) fue reemplazado por este responder simple. Las funcionalidades retiradas
+> ya no están conectadas al bot.
+
+### Verificación y mantenimiento
+
+| Acción | Endpoint |
+|--------|----------|
+| Estado de conexión | `GET /api/whatsapp/status` |
+| Ver/re-generar QR | `GET /api/whatsapp/qr?token=<JWT>` |
+| Limpiar sesión (nuevo QR) | `DELETE /api/whatsapp/session` |
 
 ---
 
 ## Configurar modalidades y precios
 
-Antes de registrar alumnos, debes configurar las modalidades en la base de datos.
-Puedes hacerlo desde Supabase Dashboard → Table Editor → `modality_configs`, o usando
-el siguiente script SQL en Supabase → SQL Editor:
+Antes de registrar alumnos, debes tener las modalidades en la base de datos. Puedes:
+
+- Ejecutar el seed de producción (Paso 7), o
+- Insertarlas desde Supabase Dashboard → Table Editor → `modality_configs`, o
+- Usar Supabase → SQL Editor:
 
 ```sql
 INSERT INTO modality_configs (id, modality, name, description, "maxCapacity", "monthlyFee", "isActive", "updatedAt")
 VALUES
-  (gen_random_uuid(), 'PERSONAL_CHILD', 'Personalizado Infantil', 'Clase individual para niños', 1,   800.00, true, now()),
-  (gen_random_uuid(), 'GROUP_CHILD',    'Grupal Infantil',        'Grupos de hasta 8 niños',    8,   500.00, true, now()),
-  (gen_random_uuid(), 'GROUP_ADULT',    'Grupal Adultos',         'Grupos de adultos',           12,  600.00, true, now()),
-  (gen_random_uuid(), 'FREE_ACCESS',    'Acceso Libre',           'Acceso libre a la alberca',   20,  400.00, true, now()),
-  (gen_random_uuid(), 'AQUA_THERAPY',   'Terapia Acuática',       'Terapia en agua',             4,   900.00, true, now());
+  (gen_random_uuid(), 'BABY_PHASE1', 'Natación Bebés Fase 1', '4 a 12 meses. Maestra dedicada.',        1,  1100.00, true, now()),
+  (gen_random_uuid(), 'BABY_PHASE2', 'Natación Bebés Fase 2', '1 a 3 años. Maestra dedicada.',          1,  1100.00, true, now()),
+  (gen_random_uuid(), 'BABY_PHASE3', 'Natación Bebés Fase 3', '3 a 5 años. Maestra dedicada.',          1,  1100.00, true, now()),
+  (gen_random_uuid(), 'GROUP_CHILD', 'Natación Grupal',       'Grupos de hasta 8 niños.',               8,  800.00,  true, now()),
+  (gen_random_uuid(), 'GROUP_ADULT', 'Natación Adultos Grupal','Grupos de hasta 10 adultos.',           10, 800.00,  true, now()),
+  (gen_random_uuid(), 'FREE_ACCESS', 'Acceso Libre',          'Acceso libre lunes a viernes.',          20, 1000.00, true, now()),
+  (gen_random_uuid(), 'AQUA_THERAPY','Terapia Acuática',      'Rehabilitación y movilidad.',            4,  1200.00, true, now());
 ```
 
-> **Nota:** Los precios son de ejemplo. Modifícalos según las tarifas reales de la academia.
+> Los precios son de ejemplo. Ajusta los montos reales de la academia.
+
+---
+
+## Automatizaciones (cron jobs)
+
+- **Recordatorios de pago:** cron diario a las 9:00 AM (zona `America/Mexico_City`). Envía recordatorio por WhatsApp cuando la fecha de pago del alumno (`paymentDay`) está dentro de ±5 días. Idempotente vía `automation_logs`.
+- Los cron jobs se registran solo si `REDIS_URL` está configurada y Redis responde; si no, el sistema arranca en modo degradado (sin caché ni automatizaciones).
 
 ---
 
 ## Problemas comunes
 
 ### `Error: P1001 Can't reach database server`
-- Verifica que la URL de Supabase sea correcta (copia exactamente del dashboard)
-- Verifica que tu contraseña no tenga caracteres especiales sin encodear
-- Si el password tiene `@`, `#`, `%` o `!`, encódalos: `@` → `%40`, `#` → `%23`
+- Verifica que la URL de Supabase sea correcta (cópiala exactamente del dashboard).
+- Si el password tiene caracteres especiales (`@`, `#`, `%`, `!`), encódalos: `@` → `%40`, `#` → `%23`.
 
 ### `Error: Redis connection refused`
-- Verifica que Redis esté corriendo: `redis-cli ping` → debe responder `PONG`
-- O usa Redis Cloud y actualiza `REDIS_URL`
+- Verifica que Redis esté corriendo: `redis-cli ping` → debe responder `PONG`.
+- O usa Redis Cloud y actualiza `REDIS_URL`.
 
 ### El frontend muestra pantalla en blanco
-- Verifica que `VITE_API_URL` apunte al puerto correcto
-- Revisa la consola del navegador para errores de CORS
-- Verifica que `FRONTEND_URL` en el `.env` del API coincida con la URL del frontend
+- Verifica que `VITE_API_URL` apunte al puerto correcto.
+- Revisa la consola del navegador para errores de CORS.
+- Verifica que `FRONTEND_URL` en el `.env` del API coincida con la URL del frontend.
 
 ### El bot no responde mensajes
-- Verifica que el webhook de Twilio apunte a la URL correcta
-- En desarrollo, verifica que ngrok esté corriendo
-- Revisa los logs del API: `tail -f apps/api/logs/combined.log`
+- Verifica el estado en `GET /api/whatsapp/status` (debe estar `connected: true`).
+- Si no está conectado, abre `/api/whatsapp/qr?token=<JWT>` y escanea el QR.
+- Revisa los logs del API: `npm run dev --workspace=apps/api` (Winston escribe a stdout).
 
 ---
 
