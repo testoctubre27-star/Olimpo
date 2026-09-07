@@ -42,6 +42,7 @@ En un máximo de 24 horas recibirás respuesta de parte de nuestro equipo.
 
 // ─── HANDLER ─────────────────────────────────
 // New contact → show services → any response confirms reply within 24h.
+// After the closing response the bot goes silent so staff can take over.
 // No data is stored and no additional flows run.
 export async function handleIncomingMessage(phone: string, body: string): Promise<void> {
   const text = body.trim().toUpperCase();
@@ -53,12 +54,17 @@ export async function handleIncomingMessage(phone: string, body: string): Promis
     });
   }
 
-  logger.info('Bot', { phone, step: stepOf(session) ?? session.state, text: text.slice(0, 60) });
-
   const step = stepOf(session);
+
+  // The closing response (24h) was already sent — the bot stays silent from now on
+  // so the staff member can continue the conversation without the bot interfering.
+  if (step === 'DONE') return;
+
+  logger.info('Bot', { phone, step: step ?? session.state, text: text.slice(0, 60) });
+
   const isGreeting = GREETINGS.has(text);
 
-  // Show the services menu — new contact, greeting, or a message after the closing response.
+  // Show the services menu — new contact, greeting, or any other message before the closing response.
   if (isGreeting || step !== 'SERVICES') {
     await prisma.botSession.update({
       where: { phone },
@@ -68,7 +74,7 @@ export async function handleIncomingMessage(phone: string, body: string): Promis
     return;
   }
 
-  // Service selected (or any response) — confirm reply within 24h and end the flow.
+  // Service selected (or any response) — confirm reply within 24h and set the silent step.
   await prisma.botSession.update({
     where: { phone },
     data: { data: { step: 'DONE' } as unknown as Prisma.InputJsonValue },

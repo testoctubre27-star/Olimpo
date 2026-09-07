@@ -230,8 +230,14 @@ El bot tiene un único flujo de **2 pasos** y no guarda datos del usuario:
    Natación bebés (5-12 meses, 1-3 años, 3 a 5 años), Natación grupal, Natación personalizada, Natación Acceso libre, Terapia acuática y Calistenia.
 2. **Selección** — Ante cualquier respuesta del usuario, el bot confirma que un asesor lo contactará en un **máximo de 24 horas**.
 
-El flujo se reinicia con el siguiente mensaje. La tabla `bot_sessions` solo guarda el paso actual de la conversación
+El flujo se reinicia con el siguiente mensaje.
+
+> **Importante:** después de la respuesta de 24 horas (segundo mensaje), el bot **deja de responder**
+> para que el encargado tome la conversación manualmente sin que el bot interfiera.
+
+La tabla `bot_sessions` solo guarda el paso actual de la conversación
 (para saber si ya se mostró el menú); no se almacena información personal ni de contacto.
+Para reactivar el bot en un número, borra su registro de la tabla `bot_sessions` (paso `DONE`).
 
 > **Nota histórica:** el flujo anterior del bot (clase muestra, horarios, apartado de lugar, cursos de verano,
 > pagos, cancelación y alta de alumnos) fue reemplazado por este responder simple. Las funcionalidades retiradas

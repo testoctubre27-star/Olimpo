@@ -175,9 +175,9 @@ El bot tiene un único flujo simple de 2 pasos. No crea alumnos, no aparta lugar
    ¡Gracias por comunicarte con OLIMPO!
    ```
 
-El flujo se reinicia con el siguiente mensaje (vuelve a mostrar el menú de servicios). El bot solo
-mantiene el paso de la conversación en la tabla `bot_sessions` para saber si ya mostró los servicios;
-no almacena información del usuario.
+Tras el segundo mensaje, el bot **deja de responder**: el encargado toma la conversación manualmente
+sin que el bot interfiera. El bot solo mantiene el paso de la conversación en la tabla `bot_sessions`
+(no almacena información del usuario); para reactivarlo en un número, borra su registro (paso `DONE`).
 
 ### Nota histórica
 
