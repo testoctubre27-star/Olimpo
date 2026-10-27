@@ -52,6 +52,27 @@ router.get('/', requireTeacher, async (_req: Request, res: Response, next: NextF
 });
 
 // GET /courses/:id
+
+// GET /courses/active — active courses for bot
+router.get('/active', async (_req: Request, res: Response, next: NextFunction): Promise<void> => {
+  try {
+    const courses = await prisma.summerCourse.findMany({
+      where: { status: 'ACTIVE' },
+      include: {
+        teachers: { include: { teacher: { include: { user: { select: { name: true } } } } } },
+        _count: { select: { enrollments: { where: { status: 'CONFIRMED' } } } },
+      },
+    });
+    const result = courses.map(c => ({
+      ...c,
+      availableSpots: c.maxCapacity - c._count.enrollments,
+      isFull: c._count.enrollments >= c.maxCapacity,
+    }));
+    respond.ok(res, { data: result });
+  } catch (err) { next(err); }
+});
+
+// GET /courses/:id
 router.get('/:id', requireTeacher, async (req: Request, res: Response, next: NextFunction): Promise<void> => {
   try {
     const course = await prisma.summerCourse.findUnique({
@@ -258,3 +279,46 @@ router.get('/my-courses', requireTeacher, async (req: Request, res: Response, ne
 });
 
 export default router;
+
+// POST /courses/:id/enroll — bot creates PENDING enrollment
+router.post('/:id/enroll', async (req: Request, res: Response, next: NextFunction): Promise<void> => {
+  try {
+    const { studentPhone, studentName } = z.object({
+      studentPhone: z.string().min(1),
+      studentName: z.string().min(1),
+    }).parse(req.body);
+
+    const course = await prisma.summerCourse.findUnique({
+      where: { id: req.params.id },
+      include: { enrollments: { where: { status: 'CONFIRMED' } } },
+    });
+    if (!course) { respond.error(res, { message: 'Curso no encontrado' }, 404); return; }
+    if (course.status !== 'ACTIVE') { respond.error(res, { message: 'El curso no está disponible' }, 409); return; }
+    if (course.enrollments.length >= course.maxCapacity) { respond.error(res, { message: 'El curso está lleno' }, 409); return; }
+
+    const existing = await prisma.summerCourseEnrollment.findUnique({
+      where: { courseId_studentPhone: { courseId: req.params.id, studentPhone } },
+    });
+    if (existing) { respond.error(res, { message: 'Este alumno ya está inscrito en el curso' }, 409); return; }
+
+    const otherCourse = await prisma.summerCourseEnrollment.findFirst({
+      where: {
+        studentPhone,
+        status: { in: ['PENDING', 'CONFIRMED'] },
+        course: { status: { in: ['ACTIVE', 'DRAFT'] } },
+      },
+    });
+    if (otherCourse) { respond.error(res, { message: 'Ya tienes una inscripción activa en otro curso' }, 409); return; }
+
+    const enrollment = await prisma.summerCourseEnrollment.create({
+      data: {
+        courseId: req.params.id,
+        studentPhone,
+        studentName,
+        status: 'PENDING',
+      },
+    });
+
+    respond.created(res, { data: enrollment, message: 'Solicitud de inscripción enviada' });
+  } catch (err) { next(err); }
+});
