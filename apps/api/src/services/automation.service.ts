@@ -3,6 +3,7 @@ import { logger } from '../config/logger';
 import { runPaymentReminders } from './payment-reminder.service';
 import { suspendDelinquentStudents } from './suspension.service';
 import { expireWaitlistOffers } from './waitlist.service';
+import { markDelinquentStudents } from './delinquency.service';
 
 /**
  * Register all cron jobs.
@@ -11,11 +12,18 @@ import { expireWaitlistOffers } from './waitlist.service';
 export function registerAutomations(): void {
 
   // Payment reminders — runs every day at 9:00 AM
-  // Sends reminder to students whose paymentDay is within ±5 days of today
   cron.schedule('0 9 * * *', async () => {
     logger.info('[Cron] Running payment reminders...');
     await runPaymentReminders().catch(err =>
       logger.error('[Cron] Payment reminder error', { err })
+    );
+  }, { timezone: 'America/Mexico_City' });
+
+  // Mark students as DELINQUENT after payment day - runs daily at 00:10
+  cron.schedule('10 0 * * *', async () => {
+    logger.info('[Cron] Marking delinquent students...');
+    await markDelinquentStudents().catch(err =>
+      logger.error('[Cron] Delinquency marking error', { err })
     );
   }, { timezone: 'America/Mexico_City' });
 
@@ -28,7 +36,7 @@ export function registerAutomations(): void {
   }, { timezone: 'America/Mexico_City' });
 
   // Also check suspension daily as backup
-  cron.schedule('10 0 * * *', async () => {
+  cron.schedule('15 0 * * *', async () => {
     await suspendDelinquentStudents().catch(err =>
       logger.error('[Cron] Suspension backup error', { err })
     );
@@ -42,5 +50,5 @@ export function registerAutomations(): void {
     );
   }, { timezone: 'America/Mexico_City' });
 
-  logger.info('[Cron] Automations registered — payment reminders at 9:00 AM daily, suspension day 6 + daily backup, waitlist expiration hourly');
+  logger.info('[Cron] Automations registered — reminders 9:00 AM, delinquency marking 00:10 daily, suspension day 6 + daily backup, waitlist expiration hourly');
 }

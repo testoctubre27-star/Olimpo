@@ -4,6 +4,7 @@ import { cache } from '../config/redis';
 import { NotFoundError, ConflictError } from '../utils/errors';
 import { WhatsAppAdapter } from '../adapters/whatsapp.adapter';
 import { templates } from '../adapters/templates';
+import { promoteFromWaitlist } from './waitlist-promotion.service';
 
 export const StudentService = {
   async list(params: {
@@ -136,6 +137,11 @@ export const StudentService = {
     const student = await prisma.student.findUnique({ where: { id: studentId } });
     if (!student) throw new NotFoundError('Alumno');
 
+    const activeSlots = await prisma.scheduleSlot.findMany({
+      where: { studentId, isActive: true },
+      select: { scheduleId: true },
+    });
+
     await prisma.$transaction(async (tx) => {
       // Release all active slots
       await tx.scheduleSlot.updateMany({
@@ -148,6 +154,11 @@ export const StudentService = {
         data: { status: StudentStatus.SUSPENDED, conversationState: ConversationState.SUSPENDED },
       });
     });
+
+    // Try to promote from waitlist for affected schedules
+    for (const slot of activeSlots) {
+      await promoteFromWaitlist(slot.scheduleId).catch(() => {});
+    }
 
     await WhatsAppAdapter.send({
       to: student.phone,
