@@ -147,44 +147,23 @@ El bot usa **Baileys** (WhatsApp Web), no Twilio. La sesión se persiste en la t
 
 ### Flujo de conversación del bot
 
-El bot tiene un único flujo simple de 2 pasos. No crea alumnos, no aparta lugares y no registra datos:
+El bot funciona con un menú interactivo gestionado por sesiones en `bot_sessions`:
 
-1. **Inicio** — Cuando un usuario inicia la conversación o saluda (por ejemplo "Hola", "Buenas"),
-   el bot responde con la lista de servicios de la academia:
+1. **Menú principal** — Al escribir `hola`, `menú` o `inicio` se muestra el menú con opciones:
+   1. 👶🏼 Clase bebés 5 meses - 5 años (Clase muestra)
+   2. 🌞 Cursos de verano (inscripción directa)
+   3. 👦🏻 Clase grupal: 5 años en adelante (información)
+   4. 🙋🏻 Clase grupal: Adultos (información)
+   5. 💳 Realizar un pago (datos bancarios)
+   6. ❌ Cancelar / Cambiar cita (gestión con administración)
 
-   ```
-   Gracias por comunicarte con nosotros, estos son nuestros servicios:
+2. **Cursos de verano** — Al seleccionar la opción 2, el bot lista los cursos activos (`SummerCourse` con estado `ACTIVE`). El usuario selecciona un curso, ingresa el nombre del alumno(a), confirma con `SI`/`NO` y se crea una solicitud de inscripción (`SummerCourseEnrollment`) en estado `PENDING`. El administrador confirma o cancela desde el panel, con notificación por WhatsApp.
 
-   • Natación bebés de 5 - 12 meses
-   • Natación bebés de 1 - 3 años
-   • Natación bebés de 3 a 5 años
-   • Natación grupal
-   • Natación personalizada
-   • Natación Acceso libre
-   • Terapia acuatica
-   • Calistenia
-   ```
+3. **Pre-inscripción regular** — Para inscribirse a clases regulares, el bot guía paso a paso: nombre completo → selección de modalidad (`ModalityConfig`) → selección de horario disponible (con cupo) → aceptación de reglamento (`ACEPTO`/`NO ACEPTO`). Al aceptar se registra la firma en `RegulationSignature` y se crea/actualiza el alumno con estado `PENDING_PAYMENT`, asignando un `ScheduleSlot` activo. La confirmación final y asignación definitiva la realiza un administrador.
 
-2. **Selección de servicio** — Ante cualquier respuesta del usuario, el bot confirma el seguimiento:
+4. **Información y pagos** — Las opciones de información y datos de pago se responden con mensajes informativos; para cambios/cancelaciones se indica contactar a administración.
 
-   ```
-   Gracias por tu interés.
-
-   En un máximo de 24 horas recibirás respuesta de parte de nuestro equipo.
-
-   ¡Gracias por comunicarte con OLIMPO!
-   ```
-
-Tras el segundo mensaje, el bot **deja de responder**: el encargado toma la conversación manualmente
-sin que el bot interfiera. El bot solo mantiene el paso de la conversación en la tabla `bot_sessions`
-(no almacena información del usuario); para reactivarlo en un número, borra su registro (paso `DONE`).
-
-### Nota histórica
-
-El funcionamiento anterior del bot (clase muestra, selección de horarios, apartado de lugar, cursos de
-verano, datos de pago, cancelación/cambio de cita y alta automática de alumnos) fue **reemplazado** por
-el flujo descrito arriba. Esas funcionalidades fueron retiradas: se eliminaron los endpoints
-`GET /api/courses/active` y `POST /api/courses/:id/enroll` (exclusivos del bot), y los templates
+El estado de la conversación se mantiene en `bot_sessions` (`data.step`).
 no utilizados de `adapters/templates.ts`.
 
 ## Endpoints principales
